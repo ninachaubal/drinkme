@@ -1,0 +1,1642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>drinkme — your model, only smaller</title>
+<meta name="description" content="Run local models in less memory. Lossless BF16 compression, OpenAI- and Anthropic-compatible APIs, and more room for the model you want.">
+<meta property="og:title" content="drinkme — your model, only smaller">
+<meta property="og:description" content="Run local models in less memory. Lossless BF16 compression with OpenAI- and Anthropic-compatible APIs.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://drinkme.petrichor.wtf/art/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://drinkme.petrichor.wtf/art/og-card.png">
+<meta name="theme-color" content="#f3e7f4">
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="art/favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" as="font" href="fonts/old-standard-400.woff2?v=2" type="font/woff2" crossorigin>
+<link rel="preload" as="image" href="art/alice-hero-1400.webp" type="image/webp">
+<style>
+  /* Old Standard TT, self-hosted, OFL 1.1 (fonts/NOTICE, fonts/OFL.txt). The only face. */
+  @font-face{font-family:"Old Standard";font-style:normal;font-weight:400;font-display:swap;src:url(fonts/old-standard-400.woff2?v=2) format("woff2")}
+  @font-face{font-family:"Old Standard";font-style:italic;font-weight:400;font-display:swap;src:url(fonts/old-standard-400-italic.woff2?v=2) format("woff2")}
+  @font-face{font-family:"Old Standard";font-style:normal;font-weight:700;font-display:swap;src:url(fonts/old-standard-700.woff2?v=2) format("woff2")}
+
+  :root{
+    --paper:#FEFEFD;
+    --ink:#141414;
+    --ink-2:#4A4A4A;
+    --ink-3:#6E6E6E;
+    --rule:#E4E4E2;
+    --red:#B0341F;          /* the bottle: one mark per page */
+    --teal:#00918D;         /* data: faster through drinkme (validated pair with --red on this paper) */
+    --teal-text:#0E6B68;
+    --book:"Old Standard",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --bar:52px;
+    --ease:cubic-bezier(.16,1,.3,1);
+  }
+  *{box-sizing:border-box}
+  html{scroll-snap-type:y mandatory;scroll-padding-top:var(--bar);scrollbar-color:var(--ink-3) var(--paper)}
+  html,body{margin:0;background:var(--paper);color:var(--ink);font:20px/1.5 var(--book);-webkit-text-size-adjust:100%}
+  ::selection{background:var(--ink);color:var(--paper)}
+  a{color:inherit;text-underline-offset:3px;text-decoration-thickness:1px}
+  :focus-visible{outline:2px solid var(--red);outline-offset:3px}
+  button{font:inherit;color:inherit}
+  code,pre{font-family:var(--mono)}
+
+  /* ---- the bar: wordmark, the page you are on, the repo ---- */
+  .bar{position:sticky;top:0;z-index:30;height:var(--bar);display:flex;align-items:center;justify-content:space-between;
+    gap:20px;padding:0 clamp(18px,3vw,44px);background:var(--paper)}
+  .bar .mark{font-weight:700;font-size:20px;text-decoration:none;letter-spacing:.01em}
+  .bar .where{font-size:14px;color:var(--ink-3);font-style:italic}
+  .bar .gh{font-size:13px;letter-spacing:.14em;text-transform:uppercase;text-decoration:none;color:var(--ink-2)}
+  .bar .gh:hover{color:var(--ink)}
+
+  /* ---- pages ---- */
+  .page{position:relative;min-height:calc(100vh - var(--bar));min-height:calc(100dvh - var(--bar));scroll-snap-align:start;scroll-snap-stop:always;
+    padding:0 clamp(18px,3vw,44px) 64px;overflow:hidden}
+  .sheet{max-width:1180px;margin:0 auto;position:relative;min-height:calc(100vh - var(--bar) - 64px);min-height:calc(100dvh - var(--bar) - 64px)}
+  .folio{position:absolute;left:0;right:0;bottom:22px;text-align:center;font-size:14px;color:var(--red);
+    font-variant-numeric:tabular-nums;pointer-events:none}
+
+  .say{margin:0;font-size:clamp(32px,3.8vw,54px);line-height:1.16;letter-spacing:-.005em;text-wrap:pretty;font-weight:400}
+  .say em{font-style:italic}
+  .lead{font-size:clamp(20px,1.7vw,24px);line-height:1.5;max-width:52ch;margin:0}
+
+  /* the plate with the words beside it: pages 1 and 2 */
+  .plate-page .words{padding-top:max(10vh,calc(34.4vh - 116px));position:relative;min-width:0;max-width:100%}
+  .plate-page .words .say{position:relative}
+  .flow{position:absolute;top:0;left:0;right:0;pointer-events:none}
+  .flow span{position:absolute;top:0;left:0;white-space:pre;line-height:1;letter-spacing:-.005em}
+  .flow span.lead{letter-spacing:0;color:var(--ink);margin:0;max-width:none;line-height:1}
+  .flow-on{position:absolute !important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);margin:0 !important}
+  .words.flowing > .flow{position:relative}
+  .flow span.mono{font-family:var(--mono)}
+  .flow span.p{color:var(--ink-3)}
+  .flow span.ep{color:var(--ink-2)}
+  .flow span.ep u{text-decoration:underline;text-underline-offset:3px;color:var(--teal-text)}
+  .alice{position:absolute;right:clamp(0px,4vw,56px);top:9vh;margin:0;padding:0;border:0;background:none;height:min(80vh,820px);height:min(80dvh,820px);
+    transform-origin:100% 0;transition:transform 1.1s var(--ease);user-select:none;-webkit-user-drag:none;cursor:pointer}
+  .alice img{height:100%;width:auto;display:block;pointer-events:none}
+  .alice:focus-visible{outline:2px solid var(--red);outline-offset:8px}
+  .plate-page .lead{margin-top:26px;max-width:60ch}
+
+  /* the command: small type, one red mark */
+  .cmd{margin:38px 0 0;max-width:62ch;position:relative;z-index:2}
+  .cmd pre{margin:0;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;font-size:17px;line-height:1.5}
+  .cmd pre code{min-width:0;overflow-x:auto;flex:1 1 auto}
+  .cmd pre .p{color:var(--ink-3)}
+  .cmd code.lines span{display:block;padding-left:2ch;text-indent:-2ch}
+  .cmd .ep{margin:8px 0 0;font-size:16px;color:var(--ink-2);max-width:60ch}
+  .cmd .ep b{font-family:var(--mono);font-weight:600;color:var(--teal-text);font-size:15px}
+
+  /* plate pages */
+  .figure-page .sheet{display:flex;flex-direction:column;justify-content:center;padding:4vh 0 48px}
+  .figure-page .say{max-width:26ch}
+  .figure{margin:34px 0 0;position:relative}
+  svg.chart{display:block;width:100%;height:auto;overflow:visible;touch-action:pan-y}
+  svg.chart text{font-family:var(--book)}
+  .axis{stroke:var(--ink-3);stroke-width:1}
+  .tick{font-size:13px;fill:var(--ink-2);font-variant-numeric:tabular-nums}
+  .axis-title{font-size:13.5px;fill:var(--ink-3);font-style:italic}
+  .baseline{stroke:var(--ink-2);stroke-width:1}
+  .note{font-size:13.5px;fill:var(--ink-2);font-style:italic;paint-order:stroke fill;stroke:var(--paper);stroke-width:4px;stroke-linejoin:round}
+  .lbl{font-size:13.5px;fill:var(--ink);paint-order:stroke fill;stroke:var(--paper);stroke-width:4px;stroke-linejoin:round}
+  .caption{margin:14px 0 0;font-size:15px;font-style:italic;color:var(--ink-2);
+    display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center}
+  .caption .keys{display:flex;flex-wrap:wrap;gap:6px 18px;flex-basis:100%}
+  .caption .key-note{flex-basis:100%;margin:4px 0 0;max-width:62ch}
+  .caption .key{display:inline-flex;align-items:center;gap:7px;font-style:normal;font-size:14px;color:var(--ink-2)}
+  .caption .key svg{width:22px;height:14px;flex:none}
+
+  .err{border-top:1px solid var(--red);padding:12px 0 0;margin:14px 0 0;font-size:15px}
+
+  /* the rabbit page */
+  .rabbit-page .sheet{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:end;column-gap:clamp(24px,4vw,60px);padding:10vh 0 110px}
+  .rabbit{margin:0;height:min(52vh,520px);align-self:end}
+  .rabbit img{height:100%;width:auto;display:block}
+  .rabbit-page .words{align-self:center;padding-bottom:6vh;position:relative;min-width:0}
+  .rabbit-page .fine.one{margin:22px 0 0;max-width:52ch;font-size:17px;line-height:1.5;color:var(--ink-2)}
+  .rabbit-page .say{max-width:22ch}
+  .cmd.two{margin-top:30px}
+  .cmd .fine{margin:8px 0 0;font-size:16px;color:var(--ink-2);max-width:62ch}
+
+  /* the last line */
+  .end{position:absolute;left:0;right:0;bottom:52px;font-size:13.5px;line-height:1.6;color:var(--ink-3);max-width:70ch}
+  .end a{color:var(--ink-2)}
+
+  @media(max-width:900px){
+    .plate-page .words{padding-top:3vh}
+    .alice{right:-8px;top:0;height:40vh;height:40dvh}
+    .cmd{margin-top:16px}
+    .cmd pre{display:block;font-size:15px}
+    .cmd pre code{display:inline}
+    .say{font-size:clamp(26px,7.6vw,34px)}
+    .lead{font-size:17px;line-height:1.5}
+    .cmd pre code{white-space:pre-wrap;overflow-wrap:anywhere}
+    .folio{bottom:14px}
+    .page{padding-bottom:44px}
+    .sheet{min-height:calc(100dvh - var(--bar) - 44px)}
+    .figure-page .sheet{padding:7vh 0 30px;justify-content:flex-start}
+    .figure-page .say{max-width:none}
+    .rabbit-page .sheet{display:block;padding:3vh 0 120px}
+    .end{bottom:40px;font-size:12.5px}
+    .rabbit{position:absolute;left:-6px;right:auto;top:0;height:30vh;height:30dvh;margin:0}
+    .rabbit-page .fine.one{margin-top:22px}
+    .rabbit-page .words{padding-bottom:0;margin-top:18px}
+    .bar .where{display:none}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none !important;animation:none !important}
+  }
+  /* The illustrated edition: colored paper, ink, and flowing endpapers. */
+  :root{--paper:#f3e7f4;--ink:#351543;--ink-2:#573a63;--ink-3:#705378;--rule:#cdb8d1;--red:#ac2858;--teal:#087d69;--teal-text:#116353;--bar:72px}
+  html{scroll-snap-type:none;scroll-behavior:smooth}
+  body{font-size:20px}
+  ::selection{background:#d3ef84;color:#351543}
+  .bar{border-bottom:1px solid var(--rule);padding-inline:clamp(22px,4vw,64px)}
+  .bar .mark{font-size:30px;letter-spacing:-.035em}
+  .bar .bar-start{margin-left:auto;display:inline-grid;place-items:center;min-height:44px;font-size:17px;text-decoration:none}
+  .bar .bar-start:hover{text-decoration:underline;text-underline-offset:6px}
+  .bar .gh{display:inline-grid;place-items:center;min-width:44px;min-height:44px;margin-right:-10px;font-size:17px;letter-spacing:0;text-transform:none}
+  /* the three brand marks are their owners' own files (art/, provenance beside each), shown as shipped: never tinted */
+  .brand-mark{display:block;width:22px;height:22px}
+  .bar .gh:hover .brand-mark,.bar .gh:focus-visible .brand-mark{opacity:.8}
+  .bar .gh:focus-visible{outline:2px solid var(--red);outline-offset:-4px}
+  .end .brand-mark{display:inline-block;width:1.1em;height:1.1em;vertical-align:-.2em;margin-right:.3em}
+  .end a:has(.brand-mark){white-space:nowrap}   /* the mark stays with its words */
+  .skip{position:fixed;top:-100px;left:20px;z-index:100;background:var(--ink);color:var(--paper);padding:12px}
+  .skip:focus{top:12px}
+  .page{padding:90px clamp(24px,5vw,80px);min-height:0;overflow:clip;scroll-snap-align:none;scroll-snap-stop:normal}
+  .sheet{max-width:1200px;min-height:0}
+  .say{font-size:clamp(42px,4.4vw,66px);line-height:1.08;letter-spacing:-.025em;text-wrap:balance}
+  .lead{font-size:clamp(21px,1.8vw,26px);line-height:1.5}
+  .section-intro{max-width:67ch;margin:24px 0 0;font-size:21px;line-height:1.55;color:var(--ink-2)}
+  #intro{padding-top:0;padding-bottom:0;min-height:calc(100svh - var(--bar));isolation:isolate}
+  #intro .sheet{min-height:850px;padding-bottom:120px}
+  .endpaper{position:absolute;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
+  .plate-page .words{padding-top:90px;width:100%}
+  #say1{font-size:clamp(64px,7.1vw,102px);line-height:1.04;max-width:100%;letter-spacing:-.035em}
+  #say1 em,.flow em{color:#843371}
+  #words1>.lead{max-width:58ch}
+  #words1>.lead+.lead{margin-top:.75em}
+  .lead code{font-size:.84em}   /* the name as a command; relayout1 flows it at this size, in this face */
+  .alice{right:0;top:45px;height:690px;transform-origin:100% 60%;transition:transform 1.35s cubic-bezier(.2,.8,.2,1);z-index:1}
+  /* shrunk, Alice mirrors the compression: Qwen3.8-27B's sip weights are 0.72 of its BF16 size (39.485 of 54.729 GB) */
+  [data-size="small"] .alice{transform:scale(.72)}
+  .hero-action{margin-top:24px;max-width:45ch}
+  .hero-action .ep{font:18px/1.5 var(--book);max-width:37ch;margin:0 0 24px}
+  /* Carroll's lines. The hero's follows the lead; relayout1 flows both around Alice's outline, and these are
+     the source text's sizes (and its look, with no script). #fit's is a plain block in the same look. */
+  .carroll-quote{margin:34px 0 0;max-width:58ch;font-family:var(--book)}
+  .carroll-quote blockquote{margin:0;font-style:italic;font-size:clamp(20px,1.6vw,23px);line-height:1.6;color:#843371;text-wrap:pretty}
+  .carroll-quote blockquote p{margin:0}
+  .carroll-quote figcaption{margin-top:10px;font-size:15px;line-height:1.5;color:var(--ink-3)}
+  .carroll-quote cite{font-style:italic}
+  .carroll-quote blockquote em{font-style:normal}   /* Carroll's own emphasis, roman inside the italic */
+  .words.flowing .carroll-quote{margin:0}
+  .flow span.quote{letter-spacing:0;color:#843371}
+  .flow span.cite{letter-spacing:0;color:var(--ink-3)}
+  .start-link{display:inline-flex;align-items:center;background:var(--ink);color:#f9eff7;padding:13px 24px;font-size:22px;text-decoration:none;border-radius:3px}
+  .start-link:hover{background:#672963}
+  /* under Alice's feet; relayout1 sets left and top on every frame of her change */
+  .alice-toggle{position:absolute;left:0;top:0;transform:translateX(-50%);z-index:1;white-space:nowrap;border:0;background:none;padding:5px;
+    font:italic 16px/1.5 var(--book);color:var(--ink);text-decoration:underline;text-underline-offset:4px;cursor:pointer}
+  .alice-toggle:focus-visible{outline:2px solid var(--red);outline-offset:4px;scroll-margin:16px}
+  .alice-toggle:not([style]){visibility:hidden}   /* until it is placed; without the script it does nothing */
+  #fit{--paper:#e0edba;background:var(--paper);padding-top:95px;padding-bottom:75px}
+  #speed{--paper:#faf3f7;background:var(--paper);padding-block:100px}
+  .figure-page .sheet{padding:0;display:block}
+  .figure-page .say{max-width:19ch}
+  .figure{margin-top:46px}
+  .caption{line-height:1.6;font-size:16px}
+  .caption .key{font-size:15px}
+  /* the results chart: one machine in plum, every other result a recessive grey (both checked with the
+     dataviz skill's validate_palette.js against this page's #faf3f7) */
+  #speed{--plum:#7a3590;--mute:#b9a8bd}
+  .chart-controls{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px 32px;margin-bottom:26px}
+  .control{margin:0;padding:0;border:0;min-width:0;max-width:100%}
+  .control label,.control legend{display:block;padding:0;font-size:15px;font-style:italic;color:var(--ink-2);margin-bottom:6px}
+  .control select{font:17px/1.4 var(--book);color:var(--ink);background:var(--paper);border:1px solid var(--ink-3);border-radius:3px;padding:9px 12px;min-height:44px;max-width:100%}
+  .seg{display:inline-flex;border:1px solid var(--ink-3);border-radius:3px}
+  .seg label{position:relative;margin:0;font:17px/1.4 var(--book);font-style:normal;color:var(--ink-2)}
+  .seg label+label{border-left:1px solid var(--ink-3)}
+  .seg input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+  .seg span{display:block;min-width:44px;padding:9px 20px;text-align:center}
+  .seg input:checked+span{background:var(--ink);color:var(--paper)}
+  .seg input:focus-visible+span{outline:2px solid var(--red);outline-offset:2px}
+  .chart-plot{position:relative;min-width:0}
+  #curve .pt{stroke:var(--paper);stroke-width:2}
+  #curve .pt.other{fill:var(--mute)} #curve .pt.mine{fill:var(--plum)}
+  #curve .faster{fill:color-mix(in srgb,#d3ef84 40%,var(--paper))}   /* the acid green of the selection, thinned */
+  #curve .ring{fill:none;stroke:var(--ink);stroke-width:1.5}
+  #curve .empty{font-size:17px;fill:var(--ink-2);font-style:italic}
+  .chart-tip{position:absolute;left:0;top:0;z-index:20;pointer-events:none;background:var(--paper);border:1px solid var(--rule);padding:6px 11px;
+    font-size:15px;line-height:1.4;color:var(--ink-2);max-width:min(560px,calc(100vw - 48px));width:max-content;visibility:hidden}
+  .chart-tip.on{visibility:visible}
+  .chart-tip b{font-weight:700;color:var(--ink)}
+  .caption .key .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .results{width:100%;max-width:940px;border-collapse:collapse;margin-top:28px;font-size:17px;line-height:1.4}
+  .results th{font-weight:400;font-style:italic;font-size:15px;color:var(--ink-2);text-align:left;padding:0 14px 8px;border-bottom:1px solid var(--ink-3)}
+  .results td{padding:11px 14px;border-bottom:1px solid var(--rule)}
+  .results th:first-child,.results td:first-child{padding-left:4px}
+  .results .num{text-align:right;font-variant-numeric:tabular-nums lining-nums;white-space:nowrap}
+  .results tbody tr{outline:none}
+  .results tbody tr.hl{background:color-mix(in srgb,var(--plum) 10%,var(--paper))}
+  .results tbody tr:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+  .results .quiet{color:var(--ink-3);font-style:italic}
+  .visually-hidden{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  @media(max-width:640px){
+    #results thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+    #results tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;padding:12px 4px;border-bottom:1px solid var(--rule)}
+    #results td{display:block;padding:0;border:0;text-align:left}
+    #results td.model{font-size:18px;color:var(--ink)}
+    #results td.speed{grid-row:1;grid-column:2;text-align:right}
+    #results td.speed .pct{font-size:13px;white-space:normal;max-width:17ch;margin-left:auto}   /* the second line wraps under the speed, and leaves the model's name its room */
+    #results td.detail{grid-column:1/-1;font-size:15px;color:var(--ink-2);text-align:left}
+    #results td.detail::before{content:attr(data-label) " ";font-style:italic;color:var(--ink-3)}
+    #results td.detail .pct{font-size:13px}
+  }
+  .sizes{margin-top:0;max-width:760px}
+  .sizes td.model{overflow-wrap:anywhere}
+  .results .pct{display:block;font-size:14px;color:var(--ink-2)}
+  .sizes th .short{display:none}   /* the header's BF16 column: "uncompressed BF16", or "BF16" on a phone */
+  .sizes-figure .caption{max-width:760px}
+  .sizes-figure .nobreak{white-space:nowrap}   /* a model's name doesn't break at its hyphen (the caption is flex, so its text sits in one span) */
+  @media(max-width:640px){
+    .sizes th,.sizes td{padding-inline:6px}
+    .sizes td{font-size:16px}
+    .sizes th .long{display:none}.sizes th .short{display:inline}
+    .sizes .pct{font-size:13px}
+  }
+  .install-page{--paper:#efe0ed;background:var(--paper);padding-block:100px}
+  .install-page .say{max-width:18ch}
+  .setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:64px;margin-top:44px;border-top:1px solid var(--rule);padding-top:32px}
+  h3{font-size:28px;font-weight:400;margin:0 0 22px}
+  .setup-grid p{font-size:18px;margin:0 0 20px}
+  .setup-grid .cmd{margin:0}
+  .setup-grid pre{font-size:15px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere}
+  .setup-grid pre code{white-space:pre-wrap;overflow-wrap:anywhere}
+  .setup-grid .cmd{margin:0 0 22px}
+  .setup-grid .copy-icon{font-size:15px}
+  .source-switch{margin:0 0 14px}
+  .source-switch .seg{display:inline-flex}
+  .source-switch .seg span{display:flex;align-items:center;gap:9px}
+  .source-switch .seg img{width:20px;height:20px;flex:none}
+  .source-switch .src-white,.source-switch input:checked+span .src-black{display:none}   /* the selected segment is dark: it shows the owner's white mark */
+  .source-switch input:checked+span .src-white{display:block}
+  .setup-grid .setup-note{font-size:16px;color:var(--ink-2);margin-top:24px}
+  .setup-grid .setup-note + .setup-note{margin-top:10px}
+  .setup-note code{font-size:13px;overflow-wrap:anywhere}
+  .connection{margin:22px 0;font-size:17px}
+  .connection dt{font-style:italic;color:var(--ink-2);margin-top:16px}
+  .connection dd{margin:4px 0 0}.connection code{font-size:15px;overflow-wrap:anywhere}.connection code.id{white-space:nowrap}
+  .setup-links{display:flex;gap:30px;font-size:17px;margin:40px 0 0;flex-wrap:wrap}
+  /* The Caterpillar sits near the section's bottom edge, at the right, in a row of his own under the setup
+     grid, so no text reaches him. The links come after him and sit low at the row's left, level with his
+     feet. Where there's no room beside him they wrap above him. His negative bottom margin takes him into
+     the section's bottom padding, and leaves a strip of the page's lilac under his grass (48 px, 32 on a
+     phone) before the next section's colour. */
+  .install-page .sheet{z-index:1}
+  .start-foot{display:flex;flex-direction:row-reverse;flex-wrap:wrap-reverse;align-items:end;justify-content:space-between;column-gap:40px;margin-top:40px}
+  .start-foot .setup-links{margin:0 auto 0 0}
+  .caterpillar{margin:0 0 -52px;height:clamp(330px,30vw,440px);flex:none}
+  .caterpillar img{height:100%;width:auto;display:block}
+  /* the smoke rings the Caterpillar's hookah sends up through the section, behind the words (the script
+     after the endpaper's draws them) */
+  .smoke{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+  #measure{color:var(--ink);--paper:#43204e;--ink:#f5e8f0;--ink-2:#e8cfe6;--ink-3:#d9badb;--rule:#84668c;--teal-text:#d7ef9a;background:var(--paper);padding-bottom:28px}
+  .rabbit-page .sheet{grid-template-columns:300px minmax(0,1fr);align-items:center;padding:10px 0 0;column-gap:70px}
+  .rabbit{height:440px;align-self:center;filter:brightness(0) invert(1);opacity:.9}
+  .rabbit-page .words{padding:0}
+  .rabbit-page .say{max-width:15ch}
+  /* every section heading (h2) runs to 22ch on a desktop; the phone widths below keep their own */
+  @media(min-width:901px){:is(.figure-page,.install-page,.rabbit-page) h2.say{max-width:22ch}}
+  /* on a wide screen relayout4 stands the Rabbit under the heading, at the left, flows the paragraph around
+     his outline and sets the steps beside him (without the script, the grid above) */
+  .rabbit-page .sheet.wrap{display:block}
+  .rabbit-page .sheet.wrap .rabbit{position:absolute;left:0;top:0;margin:0}
+  .rabbit-page .fine.one{font-size:22px;color:var(--ink-2);line-height:1.5;margin-top:26px}
+  .rabbit-page .cmd{margin-top:28px}
+  .rabbit-page .cmd .fine{font-size:18px;margin-top:22px}
+  .rabbit-page .cmd pre{font-size:16px}
+  .sharing-steps{list-style:decimal;margin:34px 0 0;padding-left:28px}
+  .sharing-steps li{padding-left:10px;margin-top:30px}
+  .sharing-steps li::marker{font-size:22px;color:var(--ink-3)}
+  .sharing-steps h3{font-size:25px;margin:0 0 12px}
+  .sharing-steps p{font-size:18px;line-height:1.5;margin:12px 0;color:var(--ink-2)}
+  .sharing-steps p code{font-size:14px;overflow-wrap:anywhere}
+  .sharing-steps .optional{font-size:16px;color:var(--ink-3);margin-left:8px}
+  .rabbit-page .sharing-steps .cmd{margin:18px 0;background:#34173e;border:1px solid var(--rule);padding:16px}
+  .sharing-steps pre,.sharing-steps pre code{white-space:pre-wrap;overflow-wrap:anywhere}
+  .sharing-steps .cmd pre{min-height:28px}
+  .sharing-steps .copy-icon{top:8px;right:8px;font-size:16px}
+  /* a command's copy button: the copy glyph in the page's ink at the code's size, a check once copied */
+  .cmd:has(.copy-icon) pre{padding-right:48px}
+  .copy-icon{position:absolute;top:-10px;right:0;display:grid;place-items:center;width:44px;height:44px;margin:0;padding:0;
+    appearance:none;background:none;border:0;border-radius:3px;color:var(--ink);cursor:pointer}
+  .copy-icon:hover{background:color-mix(in srgb,var(--ink) 12%,transparent)}
+  .copy-icon svg{width:1.25em;height:1.25em}
+  .copy-icon .copied-mark,.copy-icon[data-copied] .copy-mark{display:none}
+  .copy-icon[data-copied] .copied-mark{display:block}
+  .copy-status{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .copy-status.copy-error{position:static;display:block;width:auto;height:auto;clip-path:none;white-space:normal;font:16px/1.5 var(--book);margin-top:12px}
+  .end{position:static;grid-column:1/-1;font-size:14px;margin-top:65px;padding-top:24px;border-top:1px solid var(--rule);max-width:none}
+  @media(min-width:1600px){#intro .sheet{min-height:900px}.alice{height:740px}}
+  @media(max-width:1000px) and (min-width:901px){#say1{font-size:72px}.alice{height:580px}.plate-page .words{padding-top:70px}#intro .sheet{min-height:850px}}
+  @media(max-width:900px){
+    :root{--bar:64px}
+    .bar{padding-inline:22px;gap:20px}.bar .mark{font-size:26px}.bar .bar-start{font-size:15px}.bar .gh{font-size:15px}
+    .page{padding:62px 24px}.sheet{min-height:0}
+    #intro .sheet{min-height:730px;padding-bottom:98px}
+    .plate-page .words{padding-top:42px}
+    #say1{font-size:clamp(52px,10vw,80px);line-height:1.04;max-width:9ch}
+    .say{font-size:clamp(37px,7.5vw,58px);line-height:1.1}
+    .alice{height:355px;right:-10px;transform-origin:100% 45%}
+    .plate-page .lead{font-size:19px;line-height:1.5;margin-top:30px}
+    .hero-action{margin-top:16px;max-width:100%}.hero-action .ep{font-size:17px;max-width:38ch;margin-bottom:20px}
+    .start-link{font-size:20px;padding:12px 22px}
+    .alice-toggle{font-size:15px}
+    #fit,#speed,.install-page{padding-block:62px}
+    .section-intro{font-size:19px;margin-top:23px}.figure{margin-top:30px}
+    .figure-page .say{max-width:18ch}.figure-page .sheet{padding:0}
+    .caption{font-size:14px}.caption .key{font-size:14px}
+    .setup-grid{grid-template-columns:1fr;gap:36px;margin-top:32px;padding-top:25px}
+    .setup-grid pre{font-size:13px}.setup-grid .copy-icon{font-size:13px}.sharing-steps .copy-icon{font-size:14px}.setup-grid .cmd pre code{display:block}
+    h3{font-size:26px}.setup-links{gap:18px;font-size:16px}
+    .start-foot{margin-top:32px;column-gap:24px}.start-foot .setup-links{flex-direction:column;gap:10px}.caterpillar{height:230px;margin:24px 0 -30px}
+    .rabbit-page .sheet{display:block;padding:0}.rabbit-page .words{margin:0}
+    .rabbit{height:260px;left:-12px}.rabbit-page .fine.one{font-size:19px;margin-top:28px}
+    .rabbit-page .cmd pre{font-size:14px}.rabbit-page .cmd .fine{font-size:17px}
+    .end{margin-top:42px;font-size:13px}
+  }
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+</style>
+</head>
+<body>
+<a class="skip" href="#intro">Skip to content</a>
+
+<header class="bar" id="bar">
+  <a class="mark" href="#intro">drinkme</a>
+  <a class="bar-start" href="#start">Get started</a>
+  <a class="gh" href="https://tangled.org/ninachaubal.com/drinkme" aria-label="Source on Tangled" title="Source on Tangled"><img class="brand-mark" src="art/tangled_dolly_face_black.svg" alt=""></a>
+  <a class="gh" href="https://github.com/ninachaubal/drinkme" aria-label="Mirror on GitHub" title="Mirror on GitHub"><img class="brand-mark" src="art/GitHub_Invertocat_Black.svg" alt=""></a>
+  <a class="gh" href="https://huggingface.co/drinkme-packs" aria-label="Packs on Hugging Face" title="Packs on Hugging Face"><img class="brand-mark" src="art/huggingface_logo-noborder.svg" alt=""></a>
+</header>
+
+<main>
+<!-- 1 · what it is, and how to run it -->
+<section class="page plate-page" id="intro" data-name="The bottle" data-size="normal" aria-labelledby="say1">
+  <canvas class="endpaper" id="endpaper" aria-hidden="true"></canvas>
+  <div class="sheet">
+    <div class="words" id="words1">
+      <h1 class="say" id="say1">Your model, <em>only smaller.</em></h1>
+      <div class="flow" id="flow1" aria-hidden="true"></div>
+      <p class="lead"><code>drinkme</code> runs local AI models with losslessly compressed BF16 weights. They take up a quarter less memory, with every weight preserved bit for bit. That leaves more room for your model and can make generation faster, too.</p>
+      <p class="lead" id="lead1b">Qwen3.8-27B drops from 55 GB to 39 GB, enough to fit a single 48 GB GPU, and can generate about 20% faster than it does uncompressed.</p>
+      <figure class="carroll-quote" id="quote1">
+        <blockquote><p>“What a curious feeling!” said Alice; “I must be shutting up like a telescope.”</p></blockquote>
+        <figcaption>Lewis Carroll, <cite>Alice’s Adventures in Wonderland</cite> (1865)</figcaption>
+      </figure>
+      <div class="cmd hero-action">
+        <p class="ep">Serve it on your own machine and connect your favourite OpenAI- or Anthropic-compatible client.</p>
+        <a class="start-link" href="#start">Get started</a>
+      </div>
+    </div>
+    <button class="alice" id="alice1" type="button" aria-pressed="false" aria-label="Alice with the DRINK ME bottle. Press to shrink her, and press again to bring her back.">
+      <picture>
+        <source srcset="art/alice-hero-1400.webp 734w, art/alice-hero-2048.webp 1073w" type="image/webp">
+        <img id="aliceImg" src="art/alice-hero-1400.png" fetchpriority="high"
+          alt="Alice, in a yellow dress and white apron, examining a little bottle whose paper label says DRINK ME. The Nursery Alice, hand-coloured by John Tenniel, 1890.">
+      </picture>
+    </button>
+    <button class="alice-toggle" id="resizeAlice" type="button" aria-pressed="false">Shrink Alice</button>
+  </div>
+</section>
+
+<!-- 3 · the little door -->
+<section class="page figure-page" id="fit" data-name="The little door" aria-labelledby="say3">
+  <div class="sheet">
+    <h2 class="say" id="say3">Make room for a bigger model.</h2>
+    <p class="section-intro">The room you save is yours to spend. Fit a model that wouldn’t load before, or keep the one you have and give it a longer context. drinkme has two compression profiles: sip, the default, and gulp, which is a little smaller but slower to decode.</p>
+    <figure class="carroll-quote" id="quote3">
+      <blockquote><p>“<em>Now</em> I’m the right size to get through the little door!”</p></blockquote>
+      <figcaption>Lewis Carroll, <cite>The Nursery “Alice”</cite> (1890)</figcaption>
+    </figure>
+    <figure class="figure sizes-figure" id="sizesFig" hidden>
+      <table class="results sizes" id="sizes">
+        <caption class="visually-hidden">Each model’s weights in GB: uncompressed BF16, and compressed with sip and with gulp</caption>
+        <thead><tr><th scope="col">Model</th><th scope="col" class="num"><span class="long">uncompressed BF16</span><span class="short">BF16</span></th><th scope="col" class="num">sip</th><th scope="col" class="num">gulp</th></tr></thead>
+        <tbody id="sizesBody"></tbody>
+      </table>
+      <figcaption class="caption"><span>These are the weights alone. You’ll also need room for the KV cache and runtime.</span></figcaption>
+    </figure>
+
+  </div>
+</section>
+
+<!-- 2 · the picture -->
+<section class="page figure-page" id="speed" data-name="The picture" aria-labelledby="say2">
+  <div class="sheet">
+    <h2 class="say" id="say2">Smaller, and often faster.</h2>
+    <p class="section-intro">Where memory bandwidth is the limit, reading fewer bytes makes generation faster, too. Choose a GPU like yours to see how much.</p>
+    <figure class="figure" id="curveFig" aria-labelledby="say2">
+      <div class="chart-controls">
+        <div class="control"><label for="machineSelect">GPU</label>
+          <select id="machineSelect" disabled><option value="">Loading results…</option></select></div>
+        <fieldset class="control" id="profileField" hidden><legend>Profile</legend><div class="seg" id="profileToggle"></div></fieldset>
+      </div>
+      <div class="chart-plot">
+        <svg class="chart" id="curve" role="img" aria-labelledby="curveTitle curveDesc"><title id="curveTitle">Generation speed, compressed versus uncompressed BF16, plotted against measured read bandwidth</title><desc id="curveDesc"></desc></svg>
+        <div class="chart-tip" id="tip" aria-hidden="true"></div>
+      </div>
+      <div class="caption" id="curveKey"></div>
+      <table class="results" id="results" hidden>
+        <caption class="visually-hidden" id="resultsCaption"></caption>
+        <thead><tr><th scope="col">Model</th><th scope="col" class="num">compressed</th><th scope="col" class="num" id="stockHead">uncompressed</th><th scope="col" class="num">speed</th></tr></thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </figure>
+    <noscript><div class="err">The chart is drawn in the browser from <code>data/points.json</code>. With scripts off, that file has the BF16 results, and each record includes its source.</div></noscript>
+
+  </div>
+</section>
+
+<section class="page install-page" id="start" aria-labelledby="startTitle">
+  <svg class="smoke" id="smoke5" aria-hidden="true" focusable="false"></svg>
+  <div class="sheet">
+    <h2 class="say" id="startTitle">Let’s get your model running.</h2>
+    <p class="section-intro">You’ll need Linux with an NVIDIA or ROCm-supported AMD GPU, or a Mac with Apple silicon, plus Git and <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. Without a supported GPU, drinkme still runs on the CPU, just slowly.</p>
+    <p class="section-intro">On the first run, drinkme sets up PyTorch for your GPU and suggests a model that fits your memory. If the model has a <a href="https://huggingface.co/drinkme-packs">published pack</a>, drinkme downloads it, about a quarter smaller than the original, and checks it bit for bit against the original before serving. Otherwise it downloads the original and compresses it on your machine. Either way, it’s kept for next time.</p>
+    <div class="setup-grid">
+      <div>
+        <h3>Install &amp; serve</h3>
+        <fieldset class="control source-switch" id="sourceField"><legend class="visually-hidden">Clone from</legend><div class="seg" id="sourceToggle">
+          <label><input type="radio" name="source" value="tangled" checked><span><img class="src-black" src="art/tangled_dolly_face_black.svg" alt=""><img class="src-white" src="art/tangled_dolly_face_white.svg" alt="">Tangled</span></label>
+          <label><input type="radio" name="source" value="github"><span><img class="src-black" src="art/GitHub_Invertocat_Black.svg" alt=""><img class="src-white" src="art/GitHub_Invertocat_White.svg" alt="">GitHub</span></label>
+        </div></fieldset>
+        <div class="cmd">
+          <pre><code class="lines"><span id="cloneLine">git clone https://tangled.org/ninachaubal.com/drinkme &amp;&amp;</span><span>cd drinkme &amp;&amp;</span><span>uv sync &amp;&amp;</span><span>uv run --no-sync drinkme serve</span></code></pre>
+          <button class="copy copy-icon" id="copyInstall" type="button" data-copy="git clone https://tangled.org/ninachaubal.com/drinkme &amp;&amp; cd drinkme &amp;&amp; uv sync &amp;&amp; uv run --no-sync drinkme serve" data-noun="commands" aria-label="Copy commands" title="Copy commands">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <g class="copy-mark"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h4"/></g>
+              <path class="copied-mark" d="m5 12 4 4L19 6"/>
+            </svg>
+          </button>
+          <span class="copy-status" role="status"></span>
+        </div>
+        <p class="setup-note">The first download can be tens of gigabytes. You can choose a different model at the prompt.</p>
+        <p class="setup-note">Already have a model in mind? Use <code>uv run --no-sync drinkme serve --model Qwen3-8B</code>.</p>
+      </div>
+      <div>
+        <h3>Connect your client</h3>
+        <p>In your client’s provider settings, choose the API it uses and set the base URL:</p>
+        <dl class="connection">
+          <dt>OpenAI · Chat Completions &amp; Responses</dt>
+          <dd><code>http://127.0.0.1:3215/v1</code></dd>
+          <dt>Anthropic · Messages</dt>
+          <dd><code>http://127.0.0.1:3215</code></dd>
+          <dt>API key</dt>
+          <dd>Any non-empty value works locally, such as <code>local</code>.</dd>
+          <dt>Model</dt>
+          <dd>The name you served, such as <code class="id">Qwen3-8B</code>. You can list the models you’re serving with <code>curl http://127.0.0.1:3215/v1/models</code>.</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="start-foot">
+      <figure class="caterpillar" id="caterpillar5">
+        <img src="art/caterpillar-400.webp" srcset="art/caterpillar-400.webp 400w, art/caterpillar-700.webp 700w"
+          sizes="(max-width: 900px) 176px, 340px" width="400" height="523" loading="lazy" decoding="async"
+          alt="The Caterpillar, blue, on a mushroom, smoking a hookah, with Alice peeking over the edge. The Nursery Alice, hand-coloured by John Tenniel, 1890.">
+      </figure>
+      <p class="setup-links"><a href="https://tangled.org/ninachaubal.com/drinkme">Setup guide</a><a href="https://tangled.org/ninachaubal.com/drinkme/blob/main/docs/models.md">Models</a><a href="https://tangled.org/ninachaubal.com/drinkme/blob/main/docs/cli.md#drinkme-serve">Server options</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- 4 · your point -->
+<section class="page rabbit-page" id="measure" data-name="Your point" aria-labelledby="say4">
+  <div class="sheet">
+    <figure class="rabbit" id="rabbit4">
+      <img src="art/rabbit-tailpiece.webp" width="360" height="551" alt="The White Rabbit in a checked jacket, hurrying and looking at his pocket watch. John Tenniel, 1865.">
+    </figure>
+    <div class="words" id="words4">
+      <h2 class="say" id="say4">Curiouser and curiouser? Measure your own.</h2>
+      <div class="flow" id="flow4" aria-hidden="true"></div>
+      <p class="fine one" id="fine4">Memory savings depend mostly on the model. Speed also depends on your hardware, which may not be on the chart yet. Measure it, then share the result so the next person with the same setup knows what to expect.</p>
+      <ol class="sharing-steps">
+        <li>
+          <h3>Measure your setup</h3>
+          <p>Run this from the drinkme folder. It may download a second, larger model, so add <code>--dry-run</code> first to see the plan. Results stay local until you share them.</p>
+          <div class="cmd">
+            <pre><code>uv run --no-sync drinkme bench</code></pre>
+            <button class="copy copy-icon" type="button" data-copy="uv run --no-sync drinkme bench" aria-label="Copy benchmark command" title="Copy benchmark command">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <g class="copy-mark"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h4"/></g>
+                <path class="copied-mark" d="m5 12 4 4L19 6"/>
+              </svg>
+            </button>
+            <span class="copy-status" role="status"></span>
+          </div>
+        </li>
+        <li>
+          <h3>Share your result <span class="optional">optional</span></h3>
+          <p>Replace <code>you.example.com</code> with your Bluesky or other atproto handle.</p>
+          <div class="cmd">
+            <pre><code>uv run --no-sync drinkme publish --handle you.example.com</code></pre>
+            <button class="copy copy-icon" type="button" data-copy="uv run --no-sync drinkme publish --handle you.example.com" aria-label="Copy publish command" title="Copy publish command">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <g class="copy-mark"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h4"/></g>
+                <path class="copied-mark" d="m5 12 4 4L19 6"/>
+              </svg>
+            </button>
+            <span class="copy-status" role="status"></span>
+          </div>
+          <p>Sign in when your browser opens. Your latest result is published to your account and joins the chart above. Then invite a friend to measure theirs.</p>
+        </li>
+      </ol>
+    </div>
+    <footer class="end">
+      drinkme · Apache-2.0 · Nina Chaubal · <a href="https://tangled.org/ninachaubal.com/drinkme" title="Source on Tangled"><img class="brand-mark" src="art/tangled_dolly_face_white.svg" alt=""><span class="visually-hidden">Source on Tangled: </span>ninachaubal.com/drinkme</a> · <a href="data/points.json">Benchmark data</a> · Illustrations by John Tenniel (1865, 1890), public domain.
+    </footer>
+
+  </div>
+</section>
+</main>
+
+
+<script type="module">
+// ── the words wrap the plates' real outlines (pretext, vendored at lib/pretext) ──
+import { prepareWithSegments, layoutNextLineRange, materializeLineRange } from './lib/pretext/layout.js';
+
+// per-row [left, right] extents of each cutout's opaque pixels, 64 rows top to bottom (art/make-cutout.py)
+const ALICE = {"aspect": 0.52429, "rows": [[0.4823,0.6676],[0.4496,0.7657],[0.4401,0.7807],[0.436,0.7725],[0.4292,0.7616],[0.4223,0.797],[0.4142,0.8134],[0.4074,0.8134],[0.3992,0.8052],[0.3883,0.7916],[0.282,0.8215],[0.1962,0.8542],[0.1608,0.8706],[0.1308,0.8774],[0.0981,0.8992],[0.064,0.921],[0.0313,0.9346],[0.0041,0.9496],[0.0041,0.9578],[0.0463,0.9619],[0.0736,0.9796],[0.2793,0.9959],[0.2888,0.9946],[0.3011,0.951],[0.3174,0.8311],[0.3447,0.8515],[0.4087,0.8515],[0.3924,0.8474],[0.3815,0.8638],[0.3338,0.8992],[0.3338,0.9292],[0.3351,0.9496],[0.3379,0.936],[0.3433,0.9319],[0.3351,0.8842],[0.3256,0.8747],[0.3147,0.8651],[0.2997,0.8706],[0.297,0.8774],[0.2847,0.8883],[0.2861,0.8992],[0.2888,0.9128],[0.3229,0.921],[0.3229,0.9319],[0.3161,0.9428],[0.3079,0.951],[0.2997,0.9632],[0.2956,0.9659],[0.3079,0.9496],[0.3869,0.8719],[0.5204,0.7643],[0.5245,0.7657],[0.5313,0.7711],[0.5395,0.7725],[0.5504,0.7752],[0.5586,0.7766],[0.5654,0.7807],[0.5572,0.7875],[0.5232,0.7997],[0.4823,0.8106],[0.4523,0.8215],[0.4523,0.8215],[0.6512,0.7916],[0.6485,0.7548]]};
+const RABBIT = {"aspect":0.65336,"rows":[[0.5694,0.5778],[0.5528,0.6806],[0.5306,0.6806],[0.5056,0.6806],[0.4917,0.675],[0.4778,0.6667],[0.4667,0.65],[0.4583,0.6278],[0.4472,0.6111],[0.4194,0.5806],[0.3333,0.5361],[0.3083,0.5083],[0.3,0.5167],[0.2861,0.525],[0.2722,0.5361],[0.2583,0.55],[0.2556,0.5694],[0.2583,0.5806],[0.275,0.7944],[0.1639,0.7917],[0.1556,0.7583],[0.1528,0.7389],[0.0583,0.8361],[0.0583,0.9417],[0.0611,0.9444],[0.0778,0.9472],[0.05,0.9583],[0.0472,0.9417],[0.0472,0.9417],[0.0917,0.8972],[0.0583,0.9028],[0.0611,0.9417],[0.0639,0.9861],[0.0444,0.9861],[0.0111,0.9806],[0.0194,0.975],[0.0222,0.9694],[0.0222,0.9667],[0.0194,0.9694],[0.0167,0.9639],[0.0194,0.9722],[0.0194,0.9611],[0.0278,0.9778],[0.0278,0.9639],[0.0333,0.9694],[0.0444,0.9667],[0.0806,0.9333],[0.0972,0.9667],[0.125,0.9639],[0.0972,0.975],[0.0806,0.9833],[0.0528,0.9833],[0.0194,0.9861],[0.0,0.9806],[0.0111,0.9778],[0.0167,0.9222],[0.0139,0.8639],[0.0472,0.7528],[0.0861,0.6917],[0.0167,0.4833],[0.0194,0.5667],[0.0306,0.5611],[0.1472,0.5222],[0.3167,0.3528]]};
+
+const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace';
+const BOOK = '"Old Standard"';
+const phone = () => matchMedia('(max-width: 900px)').matches;
+const STANDOFF = () => phone() ? 22 : 36;
+const prepCache = new Map();
+const prep = (text, font) => { const k = font + '\0' + text; if (!prepCache.has(k)) prepCache.set(k, prepareWithSegments(text, font)); return prepCache.get(k); };
+const mctx = document.createElement('canvas').getContext('2d');
+const width = (font, text) => { mctx.font = font; return mctx.measureText(text).width; };
+
+// the free right edge of a line at [y0,y1) when the figure stands to the right of the words
+function slotRight(g, bands, W, y0, y1) {
+  if (y1 <= g.top || y0 >= g.top + g.h) return W;
+  const n = bands.rows.length;
+  const r0 = Math.max(0, Math.floor((y0 - g.top) / g.h * n));
+  const r1 = Math.min(n - 1, Math.floor((y1 - 1 - g.top) / g.h * n));
+  let left = 1;
+  for (let r = r0; r <= r1; r++) left = Math.min(left, bands.rows[r][0]);
+  return Math.min(W, g.left + left * g.w - STANDOFF());
+}
+// the free left edge of a line at [y0,y1) when the figure stands to the left of the words
+function slotLeft(g, bands, y0, y1) {
+  if (y1 <= g.top || y0 >= g.top + g.h) return 0;
+  const n = bands.rows.length;
+  const r0 = Math.max(0, Math.floor((y0 - g.top) / g.h * n));
+  const r1 = Math.min(n - 1, Math.floor((y1 - 1 - g.top) / g.h * n));
+  let right = 0;
+  for (let r = r0; r <= r1; r++) right = Math.max(right, bands.rows[r][1]);
+  return Math.max(0, g.left + right * g.w + STANDOFF());
+}
+// pretext lays plain text; inline marks are re-set by hand, across line breaks
+function markSpan(span, text, from, to, wrap) {
+  if (from == null || from >= text.length || to <= 0) { span.textContent = text; return; }
+  const a = Math.max(0, from), b = Math.min(text.length, to);
+  span.appendChild(document.createTextNode(text.slice(0, a)));
+  const [tag, cls] = wrap.split('.');
+  const m = document.createElement(tag); if (cls) m.className = cls; m.textContent = text.slice(a, b); span.appendChild(m);
+  span.appendChild(document.createTextNode(text.slice(b)));
+}
+
+// the words go back to the page
+function clearFlow({ words, flow, blocks }) {
+  words.classList.remove('flowing');
+  flow.textContent = ''; flow.style.height = ''; flow.style.marginTop = '';
+  blocks.forEach((b) => b.el.classList.remove('flow-on'));
+}
+// blocks flow as one column beside a figure; each block keeps its own face and size
+function flowColumn({ words, flow, figure, bands, blocks, clearFigure, clearAlso, side = 'right', edge, across }) {
+  clearFlow({ words, flow, blocks });
+  const ref = blocks[0].el;
+  const cs0 = getComputedStyle(ref);
+  const lh0 = Math.round(parseFloat(cs0.fontSize) * blocks[0].lh);
+  const sr = ref.getBoundingClientRect(), ar = figure.getBoundingClientRect();
+  const g = { left: ar.left - sr.left, top: ar.top - sr.top, w: ar.width, h: ar.height };
+  const W = across ? across.clientWidth : ref.clientWidth || words.clientWidth;   // across: the column, when the first block is narrower
+  const beside = side === 'left'
+    ? g.left + g.w > 0 && g.left + g.w < W * 0.7 && g.top < 6 * lh0 && g.top + g.h > 0
+    : g.left < W + 220 && g.left > W * 0.3 && g.top < 6 * lh0 && g.top + g.h > 0;
+  if (!beside) return;
+  flow.style.marginTop = cs0.marginTop;                // the column takes the first block's place
+  words.classList.add('flowing');
+  blocks.forEach((b) => b.el.classList.add('flow-on'));
+  let y = 0;
+  for (const b of blocks) {
+    const cs = getComputedStyle(b.sizeFrom || b.el);
+    const size = parseFloat(cs.fontSize), lh = Math.round(size * b.lh);
+    const font = `${cs.fontStyle === 'italic' ? 'italic ' : ''}${size}px ${b.mono ? MONO : BOOK}`;
+    const text = (b.text ? b.text() : b.el.textContent).replace(/[^\S ]+/g, ' ').trim();  // keeps no-break spaces (55 GB stays whole)
+    const mark = b.mark ? b.mark(text) : null;        // [from, to, tag] in whole-text offsets
+    // a mark set in another face (code, in the mono) takes its own width: a line that holds it is laid that much shorter
+    const extra = mark && b.markFont ? Math.max(0, width(b.markFont, text.slice(mark[0], mark[1])) - width(font, text.slice(mark[0], mark[1]))) : 0;
+    const prepared = prep(text, font);
+    let cursor = { segmentIndex: 0, graphemeIndex: 0 }, guard = 0, consumed = 0, last = null, first = true;
+    const indent = b.prefix ? Math.ceil(width(font, b.prefix + ' ')) : 0;
+    const cap = b.maxCh ? Math.ceil(b.maxCh * width(font, '0')) : Infinity;
+    while (guard++ < 60) {
+      const x0 = side === 'left' ? slotLeft(g, bands, y, y + lh) : 0;
+      const x = x0 + (first && b.prefix ? indent : 0);
+      let right = (side === 'left' ? Math.min(W, x0 + cap) : Math.min(cap, slotRight(g, bands, W, y, y + lh))) - x;
+      if (edge) right = Math.min(right, edge(sr, y, y + lh) - x);   // any other right-hand limit, in the words' x
+      const least = phone() ? 110 : 180;
+      let line = layoutNextLineRange(prepared, cursor, Math.max(least, right));
+      if (!line) break;
+      let { text: lineText } = materializeLineRange(prepared, line);
+      const holds = extra > 0 && mark[0] < consumed + lineText.length && mark[1] > consumed;
+      if (holds) {
+        line = layoutNextLineRange(prepared, cursor, Math.max(least, right - extra));
+        ({ text: lineText } = materializeLineRange(prepared, line));
+      }
+      if (first && b.prefix) {
+        const pre = document.createElement('span'); pre.style.font = font; pre.style.lineHeight = '1';
+        pre.className = (b.cls || '') + ' p'; pre.textContent = b.prefix;
+        pre.style.transform = `translate(${x0}px, ${y}px)`; flow.appendChild(pre);
+      }
+      const span = document.createElement('span');
+      span.style.font = font; span.style.lineHeight = '1';
+      if (b.cls) span.className = b.cls;
+      if (mark) markSpan(span, lineText, mark[0] - consumed, mark[1] - consumed, mark[2]); else span.textContent = lineText;
+      span.style.transform = `translate(${x}px, ${y}px)`;
+      flow.appendChild(span);
+      last = { y, w: x + width(font, lineText) + (holds ? extra : 0), x0, edge: x + right };
+      first = false;
+      consumed += lineText.length + 1;
+      cursor = line.end; y += lh;
+    }
+    if (b.after && last) y += b.after(flow, last, lh) || 0;
+    y += b.gapAfter || 0;
+  }
+  const below = clearAlso ? clearAlso.getBoundingClientRect().bottom - sr.top + 10 : 0;   // an element under the figure
+  flow.style.height = Math.max(y, clearFigure ? Math.max(g.top + g.h + 10, below) : 0) + 'px';
+}
+
+// one run of a block's text set in a tag, by whole-text offsets
+const markRun = (needle, tag) => (t) => { const i = t.indexOf(needle); return i < 0 ? null : [i, i + needle.length, tag]; };
+
+// ── page 1: Alice, and the words that follow her outline ──
+const words1 = document.getElementById('words1');
+const say1 = document.getElementById('say1');
+const lead1 = words1.querySelector('.lead');
+const lead1b = document.getElementById('lead1b');
+const cmd1 = words1.querySelector('.cmd');
+const quote1 = document.getElementById('quote1');
+
+const ep1 = cmd1.querySelector('.ep');
+const alice = document.getElementById('alice1');
+const page1Blocks = () => {
+  const say = { el: say1, lh: 1.04, gapAfter: 26, mark: markRun('only smaller.', 'em') };
+  // two paragraphs: what drinkme is, with its name as code, then what it does for one model
+  const code = getComputedStyle(lead1.querySelector('code'));
+  // (the break between them is the CSS's .75em; read from the size, since a flowing paragraph's margin is 0)
+  const lead = { el: lead1, lh: 1.5, gapAfter: Math.round(parseFloat(getComputedStyle(lead1b).fontSize) * 0.75), cls: 'lead', maxCh: 72,
+    mark: markRun('drinkme', 'code'), markFont: `${code.fontSize} ${MONO}` };
+  const lead2 = { el: lead1b, lh: 1.5, gapAfter: 34, cls: 'lead', maxCh: 72 };
+  // Carroll's line: a paragraph break and a little more below the lead, his name smaller under it
+  const quote = { el: quote1.querySelector('blockquote p'), lh: 1.6, gapAfter: 8, cls: 'quote' };
+  const cite = { el: quote1.querySelector('figcaption'), lh: 1.5, gapAfter: 22, cls: 'cite',
+    mark: markRun('Alice’s Adventures in Wonderland', 'cite') };
+
+  const ep = { el: ep1, lh: 1.5, gapAfter: 0, cls: 'ep', maxCh: 62, mark: markRun('http://127.0.0.1:3215/v1', 'u') };
+  return phone() ? [lead, lead2, quote, cite] : [say, lead, lead2, quote, cite];
+};
+// a figure's top, measured from its heading's bottom, in its own containing block
+const under = (fig, heading, gap) => {
+  const cb = fig.offsetParent || fig.parentElement;
+  return (heading.getBoundingClientRect().bottom - cb.getBoundingClientRect().top - (parseFloat(getComputedStyle(cb).borderTopWidth) || 0) + gap) + 'px';
+};
+// The Shrink/Grow button follows Alice's feet as she changes size, so it reads as hers and she never
+// covers it. Where it stood when she was small, her grown figure stands, and she is a toggle too, so a
+// second press in the same place still works. It is centred on her, and moved left only as far as keeps
+// it off the endpaper ribbons (their reach comes from the endpaper script).
+const resizeAlice = document.getElementById('resizeAlice');
+const endpaper = document.getElementById('endpaper');
+function placeToggle() {
+  const sheet = resizeAlice.offsetParent.getBoundingClientRect(), ar = alice.getBoundingClientRect();
+  const top = ar.bottom - sheet.top + (phone() ? 6 : 10);
+  const w = resizeAlice.offsetWidth, h = resizeAlice.offsetHeight;
+  let centre = (ar.left + ar.right) / 2 - sheet.left;
+  if (endpaper.ribbonLeft) {                         // the sheet's x and y, in the canvas's coordinates
+    const cv = endpaper.getBoundingClientRect(), y0 = sheet.top - cv.top + top;
+    centre = Math.min(centre, endpaper.ribbonLeft(y0, y0 + h) - (sheet.left - cv.left) - (phone() ? 10 : 18) - w / 2);
+  }
+  resizeAlice.style.left = Math.round(centre) + 'px';
+  resizeAlice.style.top = Math.round(top) + 'px';
+}
+function relayout1() {
+  alice.style.top = phone() ? under(alice, say1, 44) : '';
+  placeToggle();
+  // on a phone the words below Alice start under her button
+  flowColumn({ words: words1, flow: document.getElementById('flow1'), figure: alice, bands: ALICE, blocks: page1Blocks(),
+    clearFigure: phone(), clearAlso: resizeAlice, edge: besideAlice });
+}
+// past her outline, the words also stop short of her Shrink/Grow button and of the endpaper ribbons
+function besideAlice(sr, y0, y1) {
+  let x = Infinity;
+  const tr = resizeAlice.getBoundingClientRect();
+  if (tr.bottom > sr.top + y0 && tr.top < sr.top + y1) x = tr.left - sr.left - STANDOFF();
+  if (endpaper.ribbonLeft) {
+    const cv = endpaper.getBoundingClientRect();
+    x = Math.min(x, endpaper.ribbonLeft(sr.top - cv.top + y0, sr.top - cv.top + y1) - (sr.left - cv.left) - (phone() ? 10 : 18));
+  }
+  return x;
+}
+
+// ── page 4: the Rabbit at the left, the words around him ──
+// He stands under the heading and the paragraph wraps his outline. On a phone the steps follow below him;
+// on a wide screen they stand beside him, as close as his outline over their rows allows.
+const words4 = document.getElementById('words4');
+const say4 = document.getElementById('say4');
+const fine4 = document.getElementById('fine4');
+const flow4 = document.getElementById('flow4');
+const rabbit = document.getElementById('rabbit4');
+const sheet4 = rabbit.parentElement;
+const steps4 = words4.querySelector('.sharing-steps');
+const page4Blocks = () => [{ el: fine4, lh: 1.5, gapAfter: phone() ? 22 : 0, cls: 'lead', maxCh: phone() ? null : 56 }];
+function relayout4() {
+  const blocks = page4Blocks(), wide = !phone();
+  sheet4.classList.toggle('wrap', wide);
+  steps4.style.marginLeft = '';
+  rabbit.style.top = under(rabbit, say4, wide ? 30 : 22);
+  flowColumn({ words: words4, flow: flow4, figure: rabbit, bands: RABBIT, side: 'left', blocks, clearFigure: !wide, across: wide ? words4 : null });
+  if (!wide) return;
+  if (!words4.classList.contains('flowing')) { sheet4.classList.remove('wrap'); rabbit.style.top = ''; return; }   // no room: the grid
+  for (let pass = 0, x = 0; pass < 2; pass++) {       // indented, the steps run taller: measure again
+    const sr = steps4.getBoundingClientRect(), ar = rabbit.getBoundingClientRect();
+    const g = { left: ar.left - sr.left + x, top: ar.top - sr.top, w: ar.width, h: ar.height };
+    x = Math.max(x, Math.round(slotLeft(g, RABBIT, 0, sr.height)));
+    steps4.style.marginLeft = x + 'px';
+  }
+}
+function relayoutAll() { relayout1(); relayout4(); }
+
+// One opening shrink; user interaction cancels the pending automatic change.
+const page1 = document.getElementById('intro');
+const motion = matchMedia('(prefers-reduced-motion: reduce)');
+let raf = null, openingTimer = null, touched = false;
+function setAliceSize(small) {
+  page1.dataset.size = small ? 'small' : 'normal';
+  alice.setAttribute('aria-pressed', String(small));
+  resizeAlice.textContent = small ? 'Grow Alice' : 'Shrink Alice';
+  resizeAlice.setAttribute('aria-pressed', String(small));
+  cancelAnimationFrame(raf);
+  const t0 = performance.now(), dur = motion.matches ? 0 : 1450;
+  const step = (t) => {
+    relayout1();
+    if (t - t0 < dur) raf = requestAnimationFrame(step);
+    // grown, Alice can stand to the fold's edge (1280×820): keep a keyboard user's button in view
+    else if (resizeAlice.matches(':focus-visible')) resizeAlice.scrollIntoView({ block: 'nearest' });
+  };
+  raf = requestAnimationFrame(step);
+}
+function toggleAlice() {
+  touched = true; clearTimeout(openingTimer);
+  setAliceSize(page1.dataset.size !== 'small');
+  page1.dispatchEvent(new CustomEvent('alice-toggle'));   // the endpaper script answers with a wave
+}
+alice.addEventListener('click', toggleAlice);
+resizeAlice.addEventListener('click', toggleAlice);
+motion.addEventListener('change', () => { clearTimeout(openingTimer); cancelAnimationFrame(raf); relayout1(); });
+
+async function boot() {
+  try { await Promise.all([document.fonts.load('40px "Old Standard"'), document.fonts.load('italic 40px "Old Standard"')]); } catch {}
+  const imgs = [document.getElementById('aliceImg'), rabbit.querySelector('img')];
+  await Promise.all(imgs.map((img) => img.complete ? null : new Promise((r) => { img.onload = r; img.onerror = r; })));
+  relayoutAll();
+  if (!motion.matches && !touched) openingTimer = setTimeout(() => {
+    if (!touched && !document.hidden && page1.getBoundingClientRect().bottom > innerHeight / 2) setAliceSize(true);
+  }, 1000);
+  let t;
+  addEventListener('resize', () => { clearTimeout(t); t = setTimeout(relayoutAll, 120); });
+}
+boot();
+
+// copy buttons: a check for a moment and a status line when copied; if the clipboard refuses, the
+// status line stays visible and says to select the text
+const copyTimers = new WeakMap();
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('.copy-icon[data-copy]');
+  if (!b) return;
+  clearTimeout(copyTimers.get(b));
+  const status = b.parentElement.querySelector('.copy-status'), noun = b.dataset.noun || 'command';
+  status.classList.remove('copy-error'); status.textContent = '';
+  try {
+    await navigator.clipboard.writeText(b.dataset.copy);
+    b.dataset.copied = ''; b.title = 'Copied'; status.textContent = `${noun[0].toUpperCase() + noun.slice(1)} copied`;
+    copyTimers.set(b, setTimeout(() => { delete b.dataset.copied; b.title = b.getAttribute('aria-label'); status.textContent = ''; }, 1600));
+  } catch {
+    delete b.dataset.copied; b.title = b.getAttribute('aria-label');
+    status.classList.add('copy-error'); status.textContent = `Couldn’t copy. Select the ${noun} above.`;
+  }
+});
+</script>
+
+
+<script>
+// Get started: the clone line and the copy button follow the Tangled | GitHub switch
+const sourceInputs = document.querySelectorAll('input[name=source]');
+function syncSource() {
+  const github = document.querySelector('input[name=source][value=github]').checked;
+  const url = github ? 'https://github.com/ninachaubal/drinkme' : 'https://tangled.org/ninachaubal.com/drinkme';
+  document.getElementById('cloneLine').textContent = 'git clone ' + url + ' &&';
+  const b = document.getElementById('copyInstall');
+  b.dataset.copy = b.dataset.copy.replace(/^git clone \S+/, 'git clone ' + url);
+}
+sourceInputs.forEach((input) => input.addEventListener('change', syncSource));
+syncSource();   // a reload can restore the GitHub choice
+</script>
+
+<script>
+// ── the picture, drawn from data/points.json, and the fit table ──
+(() => {
+"use strict";
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const el = (name, attrs, parent) => { const n = document.createElementNS(NS, name); for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; };
+const txt = (s) => document.createTextNode(s);
+const lg = Math.log10;
+const fmt = (v, d) => Number(v).toFixed(d == null ? (v >= 100 ? 0 : v >= 10 ? 1 : 2) : d);
+const median = (a) => { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+// short labels for deviceClass values detect.py writes (on a Linux APU, the CPU brand string)
+const DEVICE_LABELS = {"AMD RYZEN AI MAX+ 395 w/ Radeon 8060S": "Strix Halo · Max+ 395"};
+const deviceLabel = (name) => DEVICE_LABELS[name] || name;
+// the tooltip's machine name: the label's first part ("Strix Halo")
+const shortDevice = (name) => deviceLabel(name).split(" · ")[0];
+const narrow = () => innerWidth < 720;
+// The ratio is compressed ÷ stock, stock_decode_tok_s: on torch the stock arm is drinkme's own runtime
+// over the raw BF16 weights, with the same kernel routes as the compressed arm and no codec (docs/bench.md,
+// Torch benchmark scope), what a user runs without drinkme's compression; on Metal it is mlx-lm's BF16
+// model. environment.platform is cuda | rocm | metal. The page names the baseline from a reader's side:
+// compressed versus uncompressed BF16, or versus MLX-LM BF16 where that is what stock is.
+// The chart-wide strings use stockName(): the one label when every cell shares it, else "uncompressed
+// BF16", which MLX-LM's BF16 model also is; each point's own strings use stockLabel().
+const stockLabel = env => env.platform === "metal" ? "MLX-LM BF16" : "uncompressed BF16";
+const stockLabels = (cs = cells) => [...new Set(cs.map(c => stockLabel(c.env)))];
+const stockName = (cs = cells) => stockLabels(cs).length === 1 ? stockLabels(cs)[0] : "uncompressed BF16";
+// view: the chosen machine (a deviceClass) and profile; rows: the table's rows for that view;
+// lit: the row whose point is highlighted and labelled (hover or focus in the table)
+let DATA = null, cells = [], machines = [], rows = [];
+const view = { device: null, profile: null };
+// The select's first option and the default view: every GPU at once, highlighted by profile, no table.
+const ALL = "all";
+let lit = null;
+
+const readJSON = (url) => fetch(url, {cache:"no-cache"}).then(r => {if (!r.ok) throw new Error(r.status + " " + r.statusText); return r.json();});
+readJSON("data/points.json")
+  .then(d => { DATA = d; boot(); })
+  .catch((e) => {
+    console.error(e);
+    const box = document.createElement("div"); box.className = "err";
+    box.textContent = "Could not load the benchmarks (" + e.message + "). Please reload the page, or open the benchmark data linked in the footer.";
+    $("curveFig").before(box);
+    $("machineSelect").replaceChildren(new Option("Results unavailable", ""));
+  });
+function metric(r, name) { const m = r.metrics.find((x) => x.name === name); return m ? Number(m.value) : null; }
+
+// -- grouping (pure: no DOM; tests/test_site_points.py lifts this block out and runs it under node) --
+// Machines the picker merges: deviceClass values a reader would call one card. Modal's A100 80GB pool
+// hands out PCIe and SXM4 silicon (measured read 1,666-1,668 vs 1,734 GB/s, 2026-09-27), and at batch 1
+// both run far below their bandwidth wall, so the variant moves decode less than the host does. Records,
+// cells, points and labels keep their exact deviceClass (the comparison identity never merges them);
+// only the machine view, its select and its link go through machineOf.
+const MACHINE_GROUPS = {"NVIDIA A100 80GB PCIe": "NVIDIA A100 80GB", "NVIDIA A100-SXM4-80GB": "NVIDIA A100 80GB"};
+const machineOf = (device) => MACHINE_GROUPS[device] || device;
+// THE COMPARISON IDENTITY (docs/versioning.md): two records are medianed into one cell only when
+// they agree on every term below. version compatibility (the major version — build_points.py
+// already admits only records comparable with the bundle's version), device, the checkpoint
+// (hfRepo at its RESOLVED revision), the compression profile, and the platform that executed the
+// decode. Device + model name alone would median an old-version sip run of one checkpoint with a
+// current gulp run of another (see docs/versioning.md).
+const versionKey = (v) => String(v || "").split(".")[0];
+const identityOf = (r) => ({
+  version: versionKey(r.version), device: r.environment.deviceClass, model: r.model.name,
+  hfRepo: r.model.hfRepo, revision: r.model.revision || "", profile: (r.compression || {}).profile || "",
+  platform: r.environment.platform || "" });
+const identityKey = (id) => [id.version, id.device, id.hfRepo, id.revision, id.profile, id.platform].join("\0");
+// Contributors. The aggregator (site/aggregator) collapses each contributor's records of one cell to
+// one record, their median, and names the contributor (a DID) in site.contributor; a cell's count is
+// its distinct contributors. A record without one (a bundle built from files) counts as its own.
+const contributorOf = (r) => (r.site && (r.site.contributor || r.site.source)) || r;
+const contributorCount = (rs) => new Set(rs.map(contributorOf)).size;
+const contributorsText = (n) => n === 1 ? "1 contributor" : `${n} contributors`;
+const measurable = (r) => r.stock.outcome === "measured" &&
+  ["compressed_decode_tok_s", "stock_decode_tok_s", "read_gb_s"].every(name => metric(r, name) > 0);
+function groupCells(records) {
+  const groups = new Map();
+  for (const r of records) {
+    if (!measurable(r)) continue;
+    const key = identityKey(identityOf(r));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const out = [];
+  for (const [, rs] of groups) {
+    const ratios = rs.map((r) => metric(r, "compressed_decode_tok_s") / metric(r, "stock_decode_tok_s"));
+    const id = identityOf(rs[0]);
+    out.push({ ...id, env: rs[0].environment, x: median(rs.map((r) => metric(r, "read_gb_s"))),
+      ratio: median(ratios), n: rs.length, contributors: contributorCount(rs), records: rs });
+  }
+  labelCells(out);
+  return out.sort((a, b) => a.x - b.x);
+}
+// The identity terms (checkpoint, revision, platform, version) on which `c` differs from `others`,
+// as short strings: what a label appends so two groups can never read as one.
+function differing(c, others) {
+  const parts = [];
+  if (others.some((o) => o.hfRepo !== c.hfRepo)) parts.push(c.hfRepo);
+  if (others.some((o) => o.revision !== c.revision)) parts.push("@" + (c.revision || "unresolved").slice(0, 7));
+  if (others.some((o) => o.platform !== c.platform)) parts.push(c.platform || "platform?");
+  if (others.some((o) => o.device !== c.device)) parts.push(c.device);
+  if (others.some((o) => o.version !== c.version)) parts.push("v" + c.version);
+  return parts;
+}
+// Every cell is labelled with its device, model and profile; where two cells still share a label,
+// the terms that differ (checkpoint revision, platform, version) are appended, so a reader can
+// never take two groups for one — differing groups are visible, never medianed together.
+function labelCells(cells) {
+  const base = (c) => `${deviceLabel(c.device)} · ${c.model} · BF16 ${c.profile}`;
+  for (const c of cells) {
+    const namesakes = cells.filter((o) => o !== c && base(o) === base(c));
+    c.label = [base(c), ...differing(c, namesakes)].join(" · ");
+    // what tells this cell from the others on the same device+model
+    const sameModel = cells.filter((o) => o !== c && o.device === c.device && o.model === c.model);
+    c.short = sameModel.length ? [c.profile, ...differing(c, sameModel)].join(" · ") : "";
+  }
+  return cells;
+}
+
+// A record whose compressed arm ran but whose uncompressed BF16 arm never loaded (the fit check
+// predicted a non-fit, or the load failed): no ratio, so no point on the chart, but a table row.
+const didntLoad = (r) => r.stock.outcome !== "measured" && metric(r, "compressed_decode_tok_s") > 0;
+const PROFILE_ORDER = ["sip", "gulp"];
+const byProfile = (a, b) => ((PROFILE_ORDER.indexOf(a) + 1 || 99) - (PROFILE_ORDER.indexOf(b) + 1 || 99)) || a.localeCompare(b);
+// A machine's name in a link: its deviceClass, lower case, every other run of characters one hyphen
+// ("AMD RYZEN AI MAX+ 395 w/ Radeon 8060S" is amd-ryzen-ai-max-395-w-radeon-8060s).
+const machineSlug = (device) => String(device).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+// The machine a new visitor sees when contributor counts tie.
+const FALLBACK_DEVICE = "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S";
+// Every machine in the data, with the profiles it has, sorted for the select. The first, the default
+// view, has the most contributors; on a tie, Strix Halo, then the most records.
+function machinesOf(records) {
+  const by = new Map();
+  for (const r of records) {
+    if (!measurable(r) && !didntLoad(r)) continue;
+    const d = machineOf(r.environment.deviceClass);
+    if (!by.has(d)) by.set(d, { device: d, label: deviceLabel(d), n: 0, profiles: new Set(), rs: [] });
+    const m = by.get(d); m.n++; m.rs.push(r);
+    const p = (r.compression || {}).profile; if (p) m.profiles.add(p);
+  }
+  const fallback = (m) => m.device === FALLBACK_DEVICE ? 0 : 1;
+  return [...by.values()].map(({ rs, ...m }) => ({ ...m, contributors: contributorCount(rs),
+    profiles: [...m.profiles].sort(byProfile) }))
+    .sort((a, b) => b.contributors - a.contributors || fallback(a) - fallback(b) || b.n - a.n ||
+      a.label.localeCompare(b.label));
+}
+// The table: one row per model for one machine and profile, smallest weights first. A measured
+// row carries its cell (its point); a didn't-load row has cell null and ratio null. A didn't-load
+// record without a profile belongs to every profile's view.
+function rowsFor(records, cells, device, profile) {
+  const med = (rs, name) => { const v = rs.map((r) => metric(r, name)).filter((x) => x != null); return v.length ? median(v) : null; };
+  const out = cells.filter((c) => machineOf(c.device) === device && c.profile === profile).map((c) => ({
+    id: c, cell: c, records: c.records, model: c.model, env: c.env, ratio: c.ratio, contributors: c.contributors,
+    tok: med(c.records, "compressed_decode_tok_s"), stock: med(c.records, "stock_decode_tok_s"),
+    gbC: med(c.records, "compressed_weights_gb") }));
+  const groups = new Map();
+  for (const r of records) {
+    if (!didntLoad(r)) continue;
+    const id = identityOf(r);
+    if (machineOf(id.device) !== device || (id.profile && id.profile !== profile)) continue;
+    const key = identityKey(id);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  for (const [, rs] of groups) {
+    const id = identityOf(rs[0]);
+    out.push({ id, cell: null, records: rs, model: id.model, env: rs[0].environment, ratio: null, contributors: contributorCount(rs),
+      tok: med(rs, "compressed_decode_tok_s"), stock: null,
+      gbC: med(rs, "compressed_weights_gb") });
+  }
+  for (const row of out) {
+    const namesakes = out.filter((o) => o !== row && o.model === row.model).map((o) => o.id);
+    row.name = [row.model, ...differing(row.id, namesakes)].join(" · ");
+  }
+  const size = (row) => row.gbC != null ? row.gbC : Infinity;
+  return out.sort((a, b) => size(a) - size(b) || a.name.localeCompare(b.name));
+}
+// The fit table's rows, written here rather than read from data/points.json: a weight footprint
+// belongs to the model, not the machine. Each number is a benchmark record's weights-only footprint
+// as the arm loaded, in decimal GB (stock_weights_gb for bf16, compressed_weights_gb for sip and
+// gulp): the Strix Halo records in data/points.json, 2026-09-27, drinkme 1.0.0. A vision model's
+// footprint includes its vision tower, which every arm loads. A model too big to load uncompressed
+// has no stock_weights_gb; its bf16 is the checkpoint's safetensors bytes instead (Qwen2.5-72B:
+// 145412407296, untied and text-only, which is how Qwen3-8B's checkpoint, 16.381 GB, matches its
+// measured 16.384).
+// To add a model, add { model: "<name as shown>", bf16: <GB>, sip: <GB>, gulp: <GB> } in its place
+// by bf16 size, largest first; null for a profile with no record yet (the table shows "—"). The
+// "% smaller" under each profile is computed from these, so there is nothing else to fill in.
+const FIT_ROWS = [
+  { model: "Qwen2.5-72B",      bf16: 145.412, sip: 103.482, gulp: 99.112 },
+  { model: "Qwen3-32B",        bf16: 65.525, sip: 47.054, gulp: 45.229 },
+  { model: "gemma-4-31B-it",   bf16: 62.57,  sip: 45.171, gulp: 43.374 },
+  { model: "Muse-Glimmer-30B", bf16: 59.646, sip: 43.037, gulp: 41.498 },
+  { model: "Qwen3.8-27B",      bf16: 54.729, sip: 39.485, gulp: 37.965 },
+  { model: "MiMo-V2.6-Distill-Qwen-9B", bf16: 18.832, sip: 14.039, gulp: 13.558 },
+  { model: "Qwen3-8B",         bf16: 16.384, sip: 12.175, gulp: 11.722 },
+  { model: "Qwen3-4B",         bf16: 8.102,  sip: 6.1,    gulp: 5.88 },
+  { model: "Qwen3-1.7B",       bf16: 3.442,  sip: 2.727,  gulp: 2.652 },
+  { model: "Qwen3-0.6B",       bf16: 1.192,  sip: 1.053,  gulp: 1.033 },
+];
+const SPEC_WORDS = "with speculative decoding";
+// A table row's second lines, from its records' per-prompt speculative decode metrics
+// (compressed_spec_decode_tok_s_<p> and stock_spec_decode_tok_s_<p>, p = agent, chat, code): each is the
+// cell's median across the row's records, and the line is "up to" the best prompt, since the story is
+// turning speculation on. Under speed, the best compressed ÷ stock over the prompts that have both.
+// Null where no record carries the metrics. The words are shown once, on the speed line (the compressed
+// line, where there is no speed line); the other lines carry them for screen readers only.
+// Not points in the chart.
+// a size cell: "12.1 GB", "—" when there is no record; how much smaller than bf16, when both are known
+const sizeText = (v) => v == null ? "—" : `${v.toFixed(1)} GB`;
+const smaller = (v, bf16) => v != null && bf16 != null && v < bf16 ? Math.round((1 - v / bf16) * 100) : null;
+// The chart's frame, fitted to the data: x = read bandwidth, y = compressed ÷ stock. Each axis spans
+// the data (y always includes 1×) plus padding, and never narrower than a minimum span, so every
+// point sits inside the frame with room for its ring.
+// x is a power scale, T(v) = (v^XP - 1)/XP (XP = 1 is linear, 0 is log): XP < 0 spreads the low
+// bandwidths, where the consumer cards sit and the differences matter, further apart than a log
+// axis would, and lets the datacenter cards crowd together at the right. y is linear.
+const log10 = Math.log10;
+function fitLog(values, minRatio, pad) {
+  let lo = log10(Math.min(...values)), hi = log10(Math.max(...values));
+  const min = log10(minRatio);
+  if (hi - lo < min) { const mid = (lo + hi) / 2; lo = mid - min / 2; hi = mid + min / 2; }
+  const p = (hi - lo) * pad;
+  return [Math.pow(10, lo - p), Math.pow(10, hi + p)];
+}
+const XP = -0.25;
+const tx = (v) => (Math.pow(v, XP) - 1) / XP, txInv = (t) => Math.pow(t * XP + 1, 1 / XP);
+const X_TICKS = [100, 150, 250, 400, 750, 1500, 3000];
+function fitX(values) {
+  const [lo, hi] = fitLog(values, 1.2, 0), a = tx(lo), b = tx(hi), p = (b - a) * 0.05;
+  return [txInv(a - p), txInv(b + p)];
+}
+function fitLin(values, minSpan, pad) {
+  let lo = Math.min(...values), hi = Math.max(...values);
+  if (hi - lo < minSpan) { const mid = (lo + hi) / 2; lo = mid - minSpan / 2; hi = mid + minSpan / 2; }
+  const p = (hi - lo) * pad;
+  return [Math.max(0, lo - p), hi + p];   // a speed ratio is never below 0
+}
+function domainOf(cells) {
+  if (!cells.length) return { x: [150, 1500], y: [0.5, 1.5] };
+  return { x: fitX(cells.map((c) => c.x)), y: fitLin([1, ...cells.map((c) => c.ratio)], 0.5, 0.08) };
+}
+// Readable ticks for a log axis. Across a decade or more: 1, 2, 5 steps. Across less (230–290
+// GB/s, say), the scale is near-linear, so round linear steps of 1, 2, 2.5 or 5 × 10^k, about
+// `target` of them. `always` (1× on the y axis) is added when it is in the domain.
+function niceTicks(lo, hi, target, always, linear) {   // linear: always round linear steps (a linear axis)
+  const clean = (v) => Number(v.toPrecision(6));
+  let out = [];
+  if (!linear && lo > 0 && hi / lo >= 8) {
+    for (let e = Math.floor(log10(lo)) - 1; e <= Math.ceil(log10(hi)); e++)
+      for (const m of [1, 2, 5]) { const v = clean(m * Math.pow(10, e)); if (v >= lo && v <= hi) out.push(v); }
+  } else {
+    // the step whose tick count is nearest the target; on a tie, the larger step
+    const e0 = Math.floor(log10((hi - lo) / Math.max(1, target)));
+    const count = (s) => Math.floor(hi / s + 1e-9) - Math.ceil(lo / s - 1e-9) + 1;
+    let step = null;
+    for (let e = e0 - 1; e <= e0 + 1; e++) for (const m of [1, 2, 2.5, 5]) {
+      const s = m * Math.pow(10, e);
+      if (step == null || Math.abs(count(s) - target) <= Math.abs(count(step) - target)) step = s;
+    }
+    for (let i = Math.ceil(lo / step - 1e-9); i * step <= hi + 1e-9; i++) out.push(clean(i * step));
+  }
+  if (always != null && always >= lo && always <= hi && !out.some((v) => Math.abs(v - always) < 1e-9)) out.push(always);
+  return out.sort((a, b) => a - b);
+}
+const SPEC_PROMPTS = ["agent", "chat", "code"];
+function specLines(records) {
+  const med = (name) => { const v = records.map((r) => metric(r, name)).filter((x) => x != null); return v.length ? median(v) : null; };
+  const comp = {}, stock = {};
+  for (const p of SPEC_PROMPTS) { comp[p] = med(`compressed_spec_decode_tok_s_${p}`); stock[p] = med(`stock_spec_decode_tok_s_${p}`); }
+  const have = (o) => SPEC_PROMPTS.filter((p) => o[p] != null && o[p] > 0);
+  const upTo = (xs, d, unit) => xs.length ? `up to ${Math.max(...xs).toFixed(d)}${unit}` : null;
+  // tok/s only, no ratio: the speed column already compares the arms, and on a card that
+  // isn't bandwidth-bound compressed ÷ uncompressed stays under 1× with speculation too, while the
+  // tok/s lines carry what speculation adds
+  const lines = {
+    compressed: upTo(have(comp).map((p) => comp[p]), 1, " tok/s"),
+    uncompressed: upTo(have(stock).map((p) => stock[p]), 1, " tok/s") };
+  if (!lines.compressed && !lines.uncompressed) return null;
+  return { lines, said: lines.compressed ? "compressed" : "uncompressed" };
+}
+// -- end grouping --
+
+renderSizes();  // the fit table needs no data/points.json
+
+function boot() {
+  cells = groupCells(DATA.records);
+  machines = machinesOf(DATA.records);
+  const select = $("machineSelect");
+  const options = machines.map((m) => new Option(m.label, m.device));
+  if (machines.length > 1) options.unshift(new Option("All GPUs", ALL));
+  select.replaceChildren(...options);
+  select.disabled = !machines.length;
+  if (!machines.length) select.replaceChildren(new Option("No results for this version yet", ""));
+  select.addEventListener("change", () => { setView(select.value, view.profile); writeLink(); });
+  const linked = readLink();
+  // a link may name a grouped machine's member deviceClass (or its slug): resolve it to the machine
+  const member = linked.machine && Object.keys(MACHINE_GROUPS).find((d) => d === linked.machine || machineSlug(d) === linked.machine);
+  const want = member ? machineOf(member) : linked.machine;
+  const device = want && (machines.find((m) => m.device === want || machineSlug(m.device) === want) || {}).device;
+  setView(device || ALL, linked.profile);
+  if (member && device) writeLink();  // a member link is rewritten to its machine's slug
+  // The charts above #speed, #start and #measure were drawn after the browser scrolled to the
+  // anchor, so the anchor has moved: land on it again, unless the reader has moved on already.
+  // A machine or profile link always lands on the speed section.
+  const target = device || linked.profile ? $("speed") : location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  if (target && !readerMoved) target.scrollIntoView();
+  let t;
+  addEventListener("resize", () => { clearTimeout(t); t = setTimeout(render, 130); });
+  addEventListener("keydown", (e) => { if (e.key === "Escape") hidePointTip(); });
+  document.addEventListener("pointerdown", (e) => { if (!$("curve").contains(e.target)) hidePointTip(); });
+}
+
+// The view is linked by the query, ?gpu=<slug>&profile=<profile>, with the #speed anchor, so a
+// shared link reproduces the view and opens on its section, and the hash stays free for every
+// section anchor (#fit, #start and the rest).
+let readerMoved = false;
+["wheel", "touchstart", "keydown"].forEach((t) => addEventListener(t, () => { readerMoved = true; }, { once: true, passive: true }));
+function readLink() {
+  const q = new URLSearchParams(location.search);
+  return { machine: q.get("gpu"), profile: q.get("profile") };
+}
+function writeLink() {
+  if (!view.device) return;
+  const q = new URLSearchParams(location.search);
+  if (view.device === ALL) q.delete("gpu"); else q.set("gpu", machineSlug(view.device));
+  if (view.profile && view.profile !== "sip") q.set("profile", view.profile); else q.delete("profile");
+  const query = q.toString();
+  history.replaceState(null, "", location.pathname + (query ? "?" + query : "") + "#speed");
+}
+
+// Choose a machine (or ALL) and profile (falling back to the default machine, then to sip, then to
+// the first profile), rebuild the profile toggle and the table, and redraw. ALL has every machine's
+// profiles and no table: one row per model per GPU would run too long.
+function setView(device, profile) {
+  const all = device === ALL && machines.length > 1;
+  const m = all ? null : machines.find((x) => x.device === device) || machines[0];
+  view.device = all ? ALL : m ? m.device : null;
+  const profiles = all ? [...new Set(machines.flatMap((x) => x.profiles))].sort(byProfile) : m ? m.profiles : [];
+  view.profile = profiles.includes(profile) ? profile : profiles.includes("sip") ? "sip" : profiles[0] || null;
+  $("machineSelect").value = view.device || "";
+  const field = $("profileField"), seg = $("profileToggle");
+  field.hidden = !profiles.length;
+  seg.replaceChildren(...profiles.map((p) => {
+    const label = document.createElement("label");
+    const input = document.createElement("input"); input.type = "radio"; input.name = "profile"; input.value = p;
+    input.checked = p === view.profile;
+    input.addEventListener("change", () => { if (input.checked) { setView(view.device, p); writeLink(); } });
+    const span = document.createElement("span"); span.textContent = p;
+    label.append(input, span); return label;
+  }));
+  rows = view.device && !all ? rowsFor(DATA.records, cells, view.device, view.profile) : [];
+  lit = null;
+  renderTable();
+  render();
+}
+
+function fmtRatio(r) { return r.toFixed(2); }
+function speedWords(r) { return r >= 1 ? `${fmtRatio(r)}× faster` : `${fmtRatio(r)}× (slower)`; }
+const tokS = (v) => v == null ? "—" : `${v.toFixed(1)} tok/s`;
+function tipText(c) {
+  const parts = [c.model, shortDevice(c.device)];
+  if (c.profile !== view.profile || (view.device !== ALL && machineOf(c.device) !== view.device)) parts.push(c.profile);
+  return { lead: parts.join(" · ") + " · ", value: speedWords(c.ratio),
+    tail: ` (${tokS(median(c.records.map((r) => metric(r, "compressed_decode_tok_s"))))} vs ${tokS(median(c.records.map((r) => metric(r, "stock_decode_tok_s"))))})`.replace(/ tok\/s vs/, " vs") +
+      ` · ${contributorsText(c.contributors)}` };
+}
+
+function renderTable() {
+  const table = $("results"), body = $("resultsBody");
+  table.hidden = !rows.length;
+  body.replaceChildren();
+  if (!rows.length) return;
+  // the stock column is "uncompressed", unless every row's stock arm is MLX-LM's BF16 model
+  const stock = stockName(rows.filter((r) => r.cell).map((r) => r.cell));
+  const stockHead = stock === "uncompressed BF16" ? "uncompressed" : stock;
+  $("stockHead").textContent = stockHead;
+  const m = machines.find((x) => x.device === view.device);
+  $("resultsCaption").textContent = `Generation speed on ${m.label}, BF16 ${view.profile || ""}: compressed versus ${stock}, one row per model`;
+  const heads = ["Model", "compressed", stockHead, "speed"];
+  rows.forEach((row) => {
+    const tr = document.createElement("tr"); tr.tabIndex = 0; row.tr = tr;
+    const cellOf = (text, cls, i) => {
+      const td = document.createElement("td"); td.className = cls; td.dataset.label = heads[i];
+      td.textContent = text; tr.appendChild(td); return td;
+    };
+    const who = document.createElement("span"); who.className = "pct"; who.textContent = contributorsText(row.contributors);
+    cellOf(row.name, "model", 0).append(who);
+    const tok = cellOf(tokS(row.tok), "num detail", 1);
+    const bf16 = row.cell ? cellOf(tokS(row.stock), "num detail", 2) : cellOf("didn’t load", "num detail quiet", 2);
+    if (!row.cell) bf16.title = "The uncompressed BF16 weights did not fit in this GPU’s memory; the compressed ones did.";
+    const speed = cellOf(row.cell ? speedWords(row.ratio) : "", "num speed", 3);
+    const spec = specLines(row.records);
+    if (spec) for (const [col, td] of [["compressed", tok], ["uncompressed", bf16]]) {
+      if (!spec.lines[col]) continue;
+      const s = document.createElement("span"); s.className = "pct"; s.textContent = spec.lines[col] + " ";
+      const w = document.createElement("span"); w.textContent = SPEC_WORDS;
+      if (col !== spec.said) w.className = "visually-hidden";
+      s.append(w); td.append(s);
+    }
+    const on = () => highlight(row.cell, row, true), off = () => { if (lit === row) highlight(null, null, false); };
+    tr.addEventListener("pointerenter", on); tr.addEventListener("focus", on);
+    tr.addEventListener("pointerleave", () => { if (document.activeElement !== tr) off(); });
+    tr.addEventListener("blur", off);
+    body.appendChild(tr);
+  });
+}
+
+// the plot's geometry, kept for the pointer layer and the highlight
+let plot = null;
+function render() {
+  const svg = $("curve");
+  svg.textContent = "";
+  hidePointTip();
+  const nw = narrow();
+  const W = Math.max(260, svg.clientWidth);
+  const H = Math.round(nw ? Math.max(300, Math.min(380, W * 0.9)) : Math.max(320, Math.min(440, W * 0.42)));
+  const m = { t: 34, r: nw ? 14 : 24, b: nw ? 50 : 54, l: nw ? 44 : 52 };
+  const px0 = m.l, px1 = W - m.r, py0 = m.t, py1 = H - m.b;
+  const dom = domainOf(cells);
+  const [xmin, xmax] = dom.x, [ymin, ymax] = dom.y;
+  const X = (v) => px0 + (tx(v) - tx(xmin)) / (tx(xmax) - tx(xmin)) * (px1 - px0);
+  const Y = (v) => py1 - (v - ymin) / (ymax - ymin) * (py1 - py0);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
+  const mine = cells.filter((c) => (view.device === ALL || machineOf(c.device) === view.device) && c.profile === view.profile);
+  const stock = stockName();
+  const t = el("title", { id: "curveTitle" }, svg); t.textContent = `Generation speed, compressed versus ${stock}, plotted against measured read bandwidth`;
+  const d = el("desc", { id: "curveDesc" }, svg);
+  if (!cells.length) d.textContent = "No results for this version of drinkme yet.";
+  else if (view.device === ALL) d.textContent = `Highlighted, every GPU with BF16 ${view.profile}: ${mine.length} results. ` +
+    (cells.length > mine.length ? "Results for other profiles are shown in grey. " : "") + "Choose one GPU for a table of its results.";
+  else d.textContent = (mine.length ? `Highlighted, ${deviceLabel(view.device)} with BF16 ${view.profile}: ` + mine.map((c) =>
+      `${c.model} decodes at ${fmt(c.ratio, 2)} times the ${stockLabel(c.env)} speed`).join("; ") + ". " : "") +
+    `Every other result is shown in grey, ${cells.length} in all. The table below the chart lists the highlighted GPU's numbers.`;
+
+  // the region above 1× (faster than stock), a quiet tint under everything else in the plot
+  el("rect", { x: px0, y: py0, width: px1 - px0, height: Math.max(0, Math.min(py1, Y(1)) - py0), class: "faster" }, svg);
+
+  // axes, ticks and the one baseline
+  el("line", { x1: px0, x2: px0, y1: py0, y2: py1, class: "axis" }, svg);
+  el("line", { x1: px0, x2: px1, y1: py1, y2: py1, class: "axis" }, svg);
+  const xt = (() => {   // the fixed ticks inside the domain; on a phone, any that would touch the one before drop out
+    const out = []; for (const v of X_TICKS.filter((v) => v >= xmin && v <= xmax))
+      if (!nw || !out.length || X(v) - X(out[out.length - 1]) >= 28) out.push(v);
+    return out.length >= 2 ? out : niceTicks(xmin, xmax, nw ? 3 : 5); })(), yt = niceTicks(ymin, ymax, nw ? 4 : 5, 1, true);
+  xt.forEach((v) => {
+    el("line", { x1: X(v), x2: X(v), y1: py1, y2: py1 + 4, class: "axis" }, svg);
+    const tt = el("text", { x: X(v), y: py1 + 18, "text-anchor": "middle", class: "tick" }, svg); tt.textContent = v.toLocaleString("en-US");
+  });
+  yt.forEach((v) => {
+    el("line", { x1: px0 - 4, x2: px0, y1: Y(v), y2: Y(v), class: "axis" }, svg);
+    const tt = el("text", { x: px0 - 8, y: Y(v) + 4, "text-anchor": "end", class: "tick" }, svg); tt.textContent = v + "×";
+  });
+  const xa = el("text", { x: px1, y: py1 + 40, "text-anchor": "end", class: "axis-title" }, svg);
+  xa.textContent = "measured read bandwidth, GB/s";
+  const ya = el("text", { x: px0 - (nw ? 36 : 44), y: py0 - 16, class: "axis-title" }, svg);
+  ya.textContent = nw ? `↑ compressed ÷ ${stock}` : `↑ compressed ÷ ${stock} speed`;
+  el("line", { x1: px0, x2: px1, y1: Y(1), y2: Y(1), class: "baseline" }, svg);
+
+  if (!cells.length) {
+    const e = el("text", { x: (px0 + px1) / 2, y: py0 + (py1 - py0) * 0.25, "text-anchor": "middle", class: "empty" }, svg);
+    e.textContent = "No results yet.";
+  }
+  const pts = cells.map((c) => ({ c, x: X(c.x), y: Y(c.ratio), mine: mine.includes(c) }));
+  // the label names the shaded region above 1× and sits inside it, where no point is: just above the line at
+  // the right or left end, else the band's top corners. On a phone the short one names no baseline, which
+  // the y axis's title already does
+  const note = nw ? "faster" : `faster than ${stock}`, noteW = note.length * 7.2 + 8;
+  const clear = (bx0, by0, bw, bh) => !pts.some((p) => p.x > bx0 - 9 && p.x < bx0 + bw + 9 && p.y > by0 - 9 && p.y < by0 + bh + 9);
+  const spots = [[px1 - noteW, Y(1) - 22], [px0 + 6, Y(1) - 22], [px1 - noteW, py0 + 4], [px0 + 6, py0 + 4]];
+  const spot = spots.find(([bx, by]) => clear(bx, by, noteW, 16)) || spots[0];
+  const noteBox = { x0: spot[0], y0: spot[1], x1: spot[0] + noteW, y1: spot[1] + 16 };
+  const same = el("text", { x: spot[0] + noteW - 4, y: spot[1] + 12, "text-anchor": "end", class: "note" }, svg); same.textContent = note;
+
+  // the marks: every other result grey, underneath; the chosen machine's in plum, on top
+  const layer = el("g", {}, svg);
+  pts.filter((p) => !p.mine).concat(pts.filter((p) => p.mine)).forEach((p) => {
+    p.node = el("circle", { cx: p.x, cy: p.y, r: 5, class: "pt " + (p.mine ? "mine" : "other") }, layer);
+  });
+  const hl = el("g", { "aria-hidden": "true" }, svg);
+  // the pointer layer: the nearest point within 20 px answers, so no one has to land on a dot
+  const pad = el("rect", { x: px0 - 12, y: py0 - 12, width: px1 - px0 + 24, height: py1 - py0 + 24, fill: "transparent" }, svg);
+  const nearest = (e) => {
+    const b = svg.getBoundingClientRect(), sx = W / b.width;
+    const ex = (e.clientX - b.left) * sx, ey = (e.clientY - b.top) * sx;
+    let best = null, bd = 20;
+    for (const p of pts) { const dd = Math.hypot(p.x - ex, p.y - ey) - (p.mine ? 3 : 0); if (dd < bd) { bd = dd; best = p; } }
+    return best;
+  };
+  pad.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") pointAt(nearest(e)); });
+  pad.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") pointAt(null); });
+  pad.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") pointAt(nearest(e)); });
+  plot = { pts, hl, noteBox, px0, px1, py0, py1, W };
+  drawKey(mine.length > 0);
+  if (lit) highlight(lit.cell, lit, true);
+}
+
+// The highlight: a ring on the point, and, for a table row, the chart's one direct label.
+function highlight(cell, row, label) {
+  lit = row;
+  rows.forEach((r) => r.tr && r.tr.classList.toggle("hl", r === row || (cell != null && r.cell === cell)));
+  if (!plot) return;
+  plot.hl.textContent = "";
+  const p = cell && plot.pts.find((q) => q.c === cell);
+  if (!p) return;
+  el("circle", { cx: p.x, cy: p.y, r: 9, class: "ring" }, plot.hl);
+  if (!label) return;
+  const text = `${cell.model} · ${speedWords(cell.ratio)}`, w = text.length * 7.4 + 6;
+  const hits = (x0, y0) => (x0 < plot.px0 || x0 + w > plot.W - 2 || y0 < plot.py0 - 20 || y0 + 16 > plot.py1) ? 99 :
+    (x0 < plot.noteBox.x1 && x0 + w > plot.noteBox.x0 && y0 < plot.noteBox.y1 && y0 + 16 > plot.noteBox.y0 ? 10 : 0) +
+    plot.pts.filter((q) => q !== p && q.x > x0 - 6 && q.x < x0 + w + 6 && q.y > y0 - 6 && q.y < y0 + 22).length;
+  const spots = [[p.x + 14, p.y - 8, "start"], [p.x - 14 - w, p.y - 8, "end"], [p.x - w / 2, p.y - 32, "middle"], [p.x - w / 2, p.y + 16, "middle"]];
+  let best = spots[0], score = Infinity;
+  for (const s of spots) { const sc = hits(s[0], s[1]); if (sc < score) { score = sc; best = s; } }
+  const tx = best[2] === "start" ? best[0] : best[2] === "end" ? best[0] + w : best[0] + w / 2;
+  const lt = el("text", { x: tx, y: best[1] + 12, "text-anchor": best[2], class: "lbl" }, plot.hl);
+  lt.textContent = text;
+}
+
+// The tooltip: one line for the point under the pointer (or under a tap); its row lights up too.
+function pointAt(p) {
+  if (!p) { hidePointTip(); return; }
+  const tip = $("tip"), s = tipText(p.c);
+  const b = document.createElement("b"); b.textContent = s.value;
+  tip.replaceChildren(txt(s.lead), b, ...(narrow() ? [] : [txt(s.tail)]));  // on phones the table carries the tok/s
+  tip.classList.add("on");
+  const row = rows.find((r) => r.cell === p.c) || null;
+  highlight(p.c, row, false);
+  const svg = $("curve"), k = svg.getBoundingClientRect().width / Number(svg.viewBox.baseVal.width);
+  const w = tip.offsetWidth, h = tip.offsetHeight, W = svg.clientWidth;
+  // above the point, inside the plot; else beside it; else below it. Never over the point itself.
+  const px = p.x * k, py = p.y * k;
+  let left = Math.max(0, Math.min(W - w, px - w / 2)), top = py - h - 14;
+  if (top < plot.py0 * k - 12) {
+    if (px + 16 + w <= W) { left = px + 16; top = Math.max(0, py - h / 2); }
+    else if (px - 16 - w >= 0) { left = px - 16 - w; top = Math.max(0, py - h / 2); }
+    else top = h <= plot.py0 * k + 4 ? 0 : py + 14;  // the axis-title band above the plot, else below
+  }
+  tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+function hidePointTip() {
+  const tip = $("tip"); if (!tip.classList.contains("on")) return;
+  tip.classList.remove("on");
+  if (plot) plot.hl.textContent = "";
+  rows.forEach((r) => r.tr && r.tr.classList.remove("hl"));
+  const focused = rows.find((r) => r.tr === document.activeElement);
+  if (focused) highlight(focused.cell, focused, true); else lit = null;
+}
+
+function keyItem(box, draw, label) {
+  const s = document.createElement("span"); s.className = "key";
+  const svg = document.createElementNS(NS, "svg"); svg.setAttribute("viewBox", "0 0 22 14"); svg.setAttribute("aria-hidden", "true");
+  draw(svg); s.appendChild(svg); s.appendChild(txt(label)); box.appendChild(s);
+}
+// The key: which colour is the chosen machine. No faster/slower key: the 1× line and the table say it.
+function drawKey(any) {
+  const cap = $("curveKey"); cap.textContent = "";
+  if (!cells.length && !rows.length) return;  // the empty frame says so itself
+  const box = document.createElement("span"); box.className = "keys"; cap.appendChild(box);
+  const all = view.device === ALL, m = machines.find((x) => x.device === view.device);
+  const grey = (s) => el("circle", { cx: 11, cy: 7, r: 5, fill: "var(--mute)" }, s);
+  if (any) keyItem(box, (s) => el("circle", { cx: 11, cy: 7, r: 5, fill: "var(--plum)" }, s), `${all ? "every GPU" : m.label}, BF16 ${view.profile}`);
+  if (!all) keyItem(box, grey, any ? "every other result" : "results on other GPUs");
+  else if (plot && plot.pts.some((p) => !p.mine)) keyItem(box, grey, "other profiles");
+  if (all) { const hint = document.createElement("span"); hint.className = "key"; hint.textContent = "Choose one GPU for a table of its results."; box.appendChild(hint); }
+}
+// The fit table, from FIT_ROWS: each model's weights, uncompressed and in each profile.
+function renderSizes() {
+  const body = $("sizesBody");
+  $("sizesFig").hidden = false;
+  body.replaceChildren(...FIT_ROWS.map((row) => {
+    const tr = document.createElement("tr");
+    const td = (cls, label) => { const c = document.createElement("td"); c.className = cls; if (label) c.dataset.label = label; tr.appendChild(c); return c; };
+    td("model").textContent = row.model;
+    td("num").textContent = sizeText(row.bf16);
+    for (const p of PROFILE_ORDER) {
+      const c = td("num" + (row[p] == null ? " quiet" : ""));
+      c.textContent = sizeText(row[p]);
+      if (row[p] == null) c.title = `No ${p} record for this model yet`;
+      const pct = smaller(row[p], row.bf16);
+      if (pct != null) {
+        const s = document.createElement("span"); s.className = "pct"; s.textContent = `${pct}% smaller`;
+        c.append(s);
+      }
+    }
+    return tr;
+  }));
+}
+})();
+</script>
+
+<script>
+// Colored endpaper ribbons. Render briefly with the opening and with each grow/shrink, then leave a still print.
+(() => {
+  const canvas = document.getElementById('endpaper');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  let w = 0, h = 0, frame = 0, phase = 0;
+  const colors = ['#dfb6e6','#ca8ed4','#a861b5','#713b89','#d8ee9d','#efa8c8'];
+  function draw(phase = 0) {
+    ctx.clearRect(0,0,w,h);
+    const mobile = w <= 900;
+    // Parallel contours wander around the outer edge, leaving a flat field for type.
+    for (let band = 0; band < colors.length; band++) {
+      ctx.beginPath();ctx.moveTo(w,0);
+      const thickness = mobile ? 7 : 15;
+      for (let y = 0; y <= h + 6; y += 6) {
+        const wave = Math.sin(y / h * Math.PI * 2.3 + phase) * (mobile ? 8 : 24);
+        const bulge = Math.pow(y / h, 5) * (mobile ? 24 : 190);
+        const x = w - (colors.length-band)*thickness - wave - bulge;
+        ctx.lineTo(x,y);
+      }
+      ctx.lineTo(w,h);ctx.closePath();ctx.fillStyle=colors[band];ctx.fill();
+    }
+  }
+  // the ribbons' leftmost x over rows [y0, y1] at any phase, for the page 1 script to keep clear of
+  canvas.ribbonLeft=(y0,y1)=>{
+    const mobile=w<=900;let x=w;
+    for(let y=Math.max(0,y0);y<=Math.min(h,y1);y+=2)x=Math.min(x,w-colors.length*(mobile?7:15)-(mobile?8:24)-Math.pow(y/h,5)*(mobile?24:190));
+    return x;
+  };
+  function resize() {
+    const rect = canvas.getBoundingClientRect(); w=rect.width;h=rect.height;
+    const dpr=Math.min(devicePixelRatio || 1,2);
+    canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw(phase);
+  }
+  resize();new ResizeObserver(resize).observe(canvas);
+  // One wave: phase = sin(π·s)·0.28 for s = elapsed / 3200 ms. A toggle mid-wave restarts at the
+  // rising-side s with the same phase, min(s, 1 - s), so no frame jumps.
+  const WAVE=3200;
+  let started=performance.now(),running=false;
+  const phaseAt=(s)=>Math.sin(s*Math.PI)*.28;
+  function animate(t) {
+    const s=Math.max(0,Math.min(1,(t-started)/WAVE));
+    phase=phaseAt(s);draw(phase);
+    running=s<1&&!motion.matches;
+    if(running)frame=requestAnimationFrame(animate);
+  }
+  function wave() {
+    if(motion.matches)return;
+    const now=performance.now(),s=running?Math.min(1,(now-started)/WAVE):1;
+    started=now-(running?Math.min(s,1-s):0)*WAVE;
+    cancelAnimationFrame(frame);running=true;frame=requestAnimationFrame(animate);
+  }
+  if(!motion.matches){running=true;frame=requestAnimationFrame(animate);}
+  // the grow/shrink toggle asks for a wave; the opening shrink already has the load wave
+  document.getElementById('intro').addEventListener('alice-toggle',wave);
+  motion.addEventListener('change',()=>{cancelAnimationFrame(frame);running=false;phase=0;draw()});
+})();
+</script>
+
+<script>
+// The Caterpillar's smoke: rings in Tenniel's own line leave the plate's plume and rise through #start to
+// its top, drifting, widening and fading, behind the words and faded out wherever they cross a line of text.
+// The ink, the line's width and the plume's place are art/make-caterpillar.py's measurements of the plate;
+// the path comes from the section's height and his place in it, so it fits every width. Reduced motion
+// gets the same rings standing still; off-screen, nothing runs.
+(() => {
+  const SMOKE = {
+    ink: "rgb(63,33,0)", alpha: 0.509,            // the plate's smoke line as the cutout carries it
+    match: 0.86,                                  // resampled, the plate's lines render lighter: at 2x this matches their mean darkness
+    line: 0.00223,                                // its width: 3 px of the plate's 1345 (drawn at 0.85 of it: his line tapers)
+    plume: [[0.7271, 0.0279], [0.861, 0.0267]],   // the right-hand plume's two open line ends, in the plate's fractions
+  };
+  const PERIOD = 52000;                           // ms for one ring to rise from the plume to the top
+  const NS = "http://www.w3.org/2000/svg";
+  const section = document.getElementById("start"), svg = document.getElementById("smoke5");
+  const img = document.querySelector("#caterpillar5 img");
+  if (!svg || !img) return;
+  const motion = matchMedia("(prefers-reduced-motion: reduce)");
+  const mk = (name, attrs, parent) => { const n = document.createElementNS(NS, name); for (const k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; };
+  let seed = 1890;                                // seeded, so the rings keep their shapes from load to load
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+  // One billow on a unit circle, like the plate's: scalloped, its line a little shaky, left open where
+  // Tenniel leaves his open. A wisp is a short open stretch of one.
+  function billow(wisp) {
+    const k = 3 + Math.floor(rand() * 3), cover = wisp ? 0.3 + rand() * 0.15 : 0.74 + rand() * 0.2;
+    const a0 = rand() * Math.PI * 2, p1 = rand() * 6, p2 = rand() * 6, p3 = rand() * 6, n = Math.round(140 * cover);
+    let d = "";
+    for (let j = 0; j <= n; j++) {
+      const th = a0 + (j / n) * cover * Math.PI * 2;
+      const r = 1 + 0.17 * (Math.abs(Math.sin(k * th / 2 + p1)) - 0.6) + 0.02 * Math.sin(7 * th + p2) + 0.013 * Math.sin(17 * th + p3) + 0.009 * Math.sin(29 * th + p1 + p2) + 0.005 * Math.sin(47 * th + p2 - p3);
+      d += (j ? "L" : "M") + (1.18 * r * Math.cos(th)).toFixed(3) + " " + (r * Math.sin(th) * (wisp ? 0.7 : 1)).toFixed(3);
+    }
+    let dash = "", left = 100;                    // his line breaks here and there
+    while (left > 0) { const on = 4 + rand() * 18, off = 0.6 + rand() * 2.2; dash += `${on.toFixed(1)} ${off.toFixed(1)} `; left -= on + off; }
+    return { d, dash: dash.trim(), spin: (rand() - 0.5) * 50, turn: (rand() - 0.5) * 70, sway: rand(), lag: (rand() - 0.5) * 0.45, size: 0.8 + rand() * 0.4 };
+  }
+
+  const defs = mk("defs", {}, svg);
+  const mask = mk("mask", { id: "smoke5-words", maskUnits: "userSpaceOnUse", x: 0, y: 0 }, defs);
+  const clear = mk("g", {}, mask);
+  const rings = mk("g", { mask: "url(#smoke5-words)", fill: "none", stroke: SMOKE.ink, "stroke-linecap": "round", "stroke-linejoin": "round" }, svg);
+  let geo = null, items = [];
+
+  // the section's measure: the plume in the section's coordinates, the rise, and the words to keep clear of
+  function layout() {
+    const sr = section.getBoundingClientRect(), ir = img.getBoundingClientRect();
+    if (!sr.width || !ir.width) return;
+    const W = sr.width, H = sr.height;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    mask.setAttribute("width", W); mask.setAttribute("height", H);
+    const [[ax, ay], [bx, by]] = SMOKE.plume;
+    const x0 = ir.left - sr.left + (ax + bx) / 2 * ir.width, top = ir.top - sr.top + Math.min(ay, by) * ir.height;
+    const r0 = (bx - ax) * ir.width * 0.5;
+    const y0 = top + r0 * 1.5;                    // the first ring's centre, inside the plume's upper billows
+    const narrowPage = W < 700;
+    geo = { W, x0, y0, rise: y0 - 18, r0, r1: narrowPage ? 34 : 62, sway: Math.min(46, W * 0.05), lean: Math.min(110, W * 0.08), line: SMOKE.line * ir.width * 0.85 };
+    const n = Math.max(7, Math.min(16, Math.round(geo.rise / (narrowPage ? 95 : 80))));
+    if (n !== items.length) {
+      seed = 1890; rings.textContent = ""; items = [];
+      for (let i = 0; i < n; i++) {
+        const shape = billow(i % 3 === 2);
+        const path = mk("path", { d: shape.d, "stroke-dasharray": shape.dash, pathLength: 100, "vector-effect": "non-scaling-stroke" }, rings);
+        items.push({ shape, path, i });
+      }
+    }
+    // each line of text, feathered: the rings all but fade out as they pass behind it, and stay one line
+    clear.textContent = "";
+    mk("rect", { x: 0, y: 0, width: W, height: H, fill: "#fff" }, clear);
+    const walker = document.createTreeWalker(section.querySelector(".sheet"), NodeFilter.SHOW_TEXT, {
+      acceptNode: (t) => t.data.trim() && !t.parentElement.closest("figure") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT });
+    const range = document.createRange(), boxes = [];
+    for (let t; (t = walker.nextNode());) { range.selectNodeContents(t); boxes.push(...range.getClientRects()); }
+    section.querySelectorAll(".copy-icon").forEach((b) => boxes.push(b.getBoundingClientRect()));
+    for (const [pad, op] of [[16, 0.3], [10, 0.45], [4, 0.8]])   // under the words, 8% of a ring's line is left
+      for (const b of boxes) mk("rect", { x: b.left - sr.left - pad, y: b.top - sr.top - pad, width: b.width + 2 * pad, height: b.height + 2 * pad, rx: pad, fill: "#000", "fill-opacity": op }, clear);
+    draw(clock());
+  }
+
+  // Ring i at time ms: t runs 0 to 1 from the plume to the top. It rises slowly at first, so the lowest
+  // rings crowd the plate's own billows, and widens, turns and fades as it climbs. The column leans a
+  // little into the page and bends in one slow S that travels up it, and each ring wanders off it a little.
+  function draw(ms) {
+    if (!geo) return;
+    const g = geo, n = items.length;
+    for (const it of items) {
+      const t = ((it.i + 0.5 + it.shape.lag) / n + ms / PERIOD + 1) % 1;
+      const r = (g.r0 + (g.r1 - g.r0) * Math.pow(t, 0.9)) * (1 + (it.shape.size - 1) * smooth(0, 0.3, t));
+      const y = g.y0 - g.rise * Math.pow(t, 1.35);
+      const bend = g.sway * t * Math.sin(Math.PI * 2 * (0.9 * t - ms / PERIOD * 0.6));
+      const own = g.sway * 0.3 * t * Math.sin(Math.PI * 2 * (1.7 * t + it.shape.sway));
+      const x = Math.min(g.W - 1.2 * r - 6, Math.max(1.2 * r + 6, g.x0 - g.lean * Math.pow(t, 1.5) + bend + own));
+      const op = SMOKE.alpha * SMOKE.match * smooth(0, 0.035, t) * (1 - smooth(0.08, 1, t));
+      const w = g.line + (Math.max(g.line, 0.75) - g.line) * smooth(0.06, 0.4, t);   // his width in the plate, a touch more above it
+      it.path.setAttribute("transform", `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${(it.shape.spin + it.shape.turn * t).toFixed(2)}) scale(${r.toFixed(2)})`);
+      it.path.setAttribute("stroke-opacity", op.toFixed(3));
+      it.path.setAttribute("stroke-width", w.toFixed(2));
+    }
+  }
+
+  // the drift: a frame about every 50 ms (it moves under a pixel a frame) while the section is on screen, none otherwise
+  let raf = 0, shown = false, last = 0, t0 = performance.now();
+  const clock = () => motion.matches ? 0 : performance.now() - t0;
+  function tick(now) {
+    raf = 0;
+    if (!shown || motion.matches) return;
+    if (now - last >= 50) { last = now; draw(clock()); }
+    raf = requestAnimationFrame(tick);
+  }
+  const run = () => { if (!raf && shown && !motion.matches) raf = requestAnimationFrame(tick); };
+  const stop = () => { cancelAnimationFrame(raf); raf = 0; };
+  new IntersectionObserver(([e]) => { shown = e.isIntersecting; shown ? run() : stop(); }).observe(section);
+  motion.addEventListener("change", () => { stop(); draw(clock()); run(); });
+  new ResizeObserver(layout).observe(section);
+  img.addEventListener("load", layout);
+  document.fonts?.ready.then(layout);
+  layout();
+})();
+</script>
+
+</body>
+</html>

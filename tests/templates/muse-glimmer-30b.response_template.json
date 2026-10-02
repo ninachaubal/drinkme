@@ -1,0 +1,43 @@
+{
+  "defaults": {
+    "role": "assistant"
+  },
+  "fields": {
+    "content": {
+      "close": [
+        "<|eot|>",
+        "<|eom|>"
+      ],
+      "content": "text",
+      "open_pattern": "to=user<\\|message\\|>"
+    },
+    "reasoning_content": {
+      "close": "<|eom|>",
+      "content": "text",
+      "open_pattern": "to=self<\\|message\\|>"
+    },
+    "tool_calls": {
+      "close": "</atem:invoke>",
+      "content": "xml-inline",
+      "content_args": {
+        "tag_pattern": "<atem:parameter\\b[^>]*?\\bname=\"(?P<key>[^\"]+)\"[^>]*?>(?P<value>.*?)</atem:parameter>",
+        "value_parser": {
+          "args": {
+            "allow_non_json": true
+          },
+          "name": "json"
+        }
+      },
+      "open_pattern": "<atem:invoke\\b[^>]*?\\bname=\"(?P<name>[^\"]+)\">",
+      "repeats": true,
+      "transform": {
+        "function": {
+          "arguments": "{content}",
+          "name": "{name}"
+        },
+        "type": "function"
+      }
+    }
+  },
+  "start_anchor": "<|start|>assistant"
+}

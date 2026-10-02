@@ -1,0 +1,14 @@
+This directory vendors @chenglou/pretext v0.0.8
+(https://github.com/chenglou/pretext), MIT-licensed — the package's declared
+license ("license": "MIT" in package.json) and its LICENSE file are the
+source; that LICENSE is included beside this NOTICE verbatim. Only the
+modules layout.js imports are vendored; the package's rich-inline.js is not.
+
+bidi.js is forked from pdf.js (https://github.com/mozilla/pdf.js), which is
+licensed under the Apache License, Version 2.0. This NOTICE preserves that
+attribution per the Apache-2.0 license's requirements for redistributed and
+modified files.
+
+  Copyright Mozilla Foundation
+  Licensed under the Apache License, Version 2.0 (the "License");
+  http://www.apache.org/licenses/LICENSE-2.0

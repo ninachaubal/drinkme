@@ -1,0 +1,171 @@
+# drinkme — the bottle labeled DRINK ME: smaller, every segment still there, lossless.
+[project]
+name = "drinkme"
+version = "1.0.0"
+description = "Lossless weight compression that makes local inference faster"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Nina Chaubal" }]
+dependencies = [
+    "numpy>=1.26",
+    "transformers>=5.15.1,<5.16",
+    "huggingface-hub>=0.34",
+    # DeltaNet fast path for hybrid models (Qwen3.5/3.8 lineage): pure-python
+    # wheel (py3-none-any, MIT), kernels are Triton JIT — works on CUDA and
+    # ROCm alike, safe in base deps (fla-core requires only einops; torch
+    # stays in the accelerator groups). EXACT-pinned: kernels affect greedy
+    # transcripts (near-tie class). Measured +5-7% decode on Qwen3.8-27B,
+    # gfx1151. causal-conv1d deliberately ABSENT: CUDA-only nvcc build —
+    # would brick a stranger's first sync on non-CUDA; CUDA users wanting
+    # the full conv path can add it themselves.
+    "flash-linear-attention==0.5.2",
+    # `drinkme publish` signs DPoP proofs (ES256, RFC 9449) for the atproto
+    # OAuth loopback flow; pure-Python JWT framing lives in publish/jwt.py,
+    # only the P-256 signature and the JWK export come from here. Added
+    # 2026-09-12; wheels for every platform, no compiler at install.
+    "cryptography>=42",
+    # Image input: decodes PNG/JPEG/WebP/GIF and resizes for the vision
+    # preprocessing in serving/vision.py. Self-contained wheels, no torch
+    # coupling. torchvision is deliberately absent because its wheels must
+    # match the torch build.
+    "pillow>=11",
+]
+# torch is NOT a base dep: it lives in the conflicting `cuda`/`rocm` groups
+# below so uv can fork the resolution per accelerator (a base torch dep
+# poisons the fork — measured 2026-08-08: with torch in base deps the rocm
+# source captured BOTH worlds and a stranger's `uv sync` got ROCm torch).
+# PyPI-publish posture (pip users would get no torch this way) is a decision
+# for the publish step — today every user path clones the repo and uv's.
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "jsonschema>=4"]  # jsonschema: the reference validator tests/test_serving_constrain.py uses as its oracle
+
+[project.scripts]
+drinkme = "drinkme.cli:entry"
+
+# THE ACCELERATOR LANES. torch (or mlx) lives in one of four conflicting
+# dependency groups so that ONE uv.lock serves every accelerator, and no
+# group is installed by default (`default-groups = []` under [tool.uv],
+# below, which carries the one current explanation of how these are
+# installed and why a working environment must never be re-resolved):
+#   NVIDIA / no accelerator:        uv sync --no-default-groups --group cuda
+#   Strix Halo gfx1151 (TheRock):   uv sync --no-default-groups --group rocm
+#   other AMD (the official wheel): uv sync --no-default-groups --group rocm-official
+#   Apple silicon:                  uv sync --no-default-groups --group metal
+#                                   (mlx + mlx-lm, and torch to pack; see below)
+# The lane a box takes is docs/hardware.md's table (AMD: docs/rocm.md); `drinkme bootstrap`
+# picks and installs it on first run. The rocm torch is EXACT-pinned so the
+# lock cannot float when TheRock's nightly channel moves: a bump is a
+# separate human setup session (docs/dev-environment.md "Recovery"), never a casual sync.
+# dependency-groups are NOT published metadata (PEP 735).
+[dependency-groups]
+# every family member must be DIRECT (sources never bind transitive deps —
+# each level of rocm -> rocm-sdk-core was its own resolution failure)
+# accelerate: the stock arm's direct-to-device load (`bench --stock-loader
+# from_pretrained`, arms.load_cpu with device_map) goes through transformers'
+# own from_pretrained, which needs it for device_map — without it that path
+# dies on transformers' own ValueError before drinkme's refusal-by-name
+# ever runs (arms.load_cpu names the fix). Not in `metal`: mlx-lm's stock
+# arm does not go through transformers' accelerate-dependent loader.
+cuda = ["torch>=2.4", "accelerate>=1.0"]
+rocm = ["torch==2.12.0a0+rocm7.13.0a20260411", "rocm[libraries]", "rocm-sdk-core", "rocm-sdk-libraries-gfx1151", "triton", "accelerate>=1.0"]
+# THE OFFICIAL ROCm LANE (2026-09-19, docs/rocm.md): PyTorch's own ROCm
+# wheel from download.pytorch.org/whl/rocm7.1. It BUNDLES the ROCm runtime
+# (~25 .so in torch/lib; runs with no /opt/rocm — measured on the RX 7600
+# XT box, gfx1102, bit-exact gates) and carries kernels for fifteen targets
+# (bootstrap.LANES quotes its arch list). The index is PINNED to rocm7.1 on
+# purpose: pytorch.org's "stable" quick-start now points at rocm7.14, which
+# no longer bundles the runtime (it expects TheRock _rocm_sdk_* siblings)
+# and which nobody here has run. torch is pinned to the version measured;
+# pytorch-triton-rocm is DIRECT so the index source binds it (torch's own
+# metadata pins its exact version). NOT the Strix Halo lane: on gfx1151
+# this wheel segfaults at the first kernel launch (measured 2026-09-19),
+# which is why `rocm` above stays on TheRock's per-target nightly.
+rocm-official = ["torch==2.13.0+rocm7.1", "triton-rocm==3.7.1", "accelerate>=1.0"]
+# Both pins are load-bearing (2026-09-21, the first lock on a real line): uv
+# resolves `torch==2.13.0` against the rocm7.1 index as unsatisfiable — the
+# local label must be spelled — and torch 2.13.0+rocm7.1's own metadata
+# requires `triton-rocm==3.7.1` (the index's NEW triton name; the old
+# `pytorch-triton-rocm` stops at 3.5.1 and belongs to torch <= 2.10). A
+# transitive dep never inherits a source (the rule two lines up), so it is
+# listed here and bound below.
+# THE METAL LANE (docs/metal.md): Apple silicon serves through
+# serving/engine_mlx.py over mlx-lm, and drinkme's MLX code never imports
+# torch. torch is here for `drinkme pack`: pack_model reads the checkpoint
+# through it (the meta-device skeleton, safetensors' pt reader), and `serve`
+# packs on first use, so without it the quickstart stops at "packing needs
+# torch" on a Mac. It is PyPI's macOS arm64 wheel, the same torch 2.13.0 the
+# cuda group locks (a CPU/MPS build; packing runs on the CPU). Installed, it
+# is also loaded by transformers when mlx-lm imports its tokenizer, which
+# costs the serving process about 0.2 GB and 0.7 s at start on an M4;
+# nothing reads it there. darwin/arm64-marked so the shared lock stays one
+# lock: on any other platform this group resolves to nothing (mlx's Linux
+# build needs the `[cpu]` extra and is a dev install by hand — AGENTS.md's
+# rule, not a lane).
+metal = ["mlx>=0.32; sys_platform == 'darwin' and platform_machine == 'arm64'",
+         "mlx-lm>=0.31; sys_platform == 'darwin' and platform_machine == 'arm64'",
+         "torch>=2.4; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
+[tool.uv]
+# TheRock publishes only prerelease-versioned wheels (+rocm7.x.0aYYYYMMDD)
+prerelease = "allow"
+# EMPTY, deliberately: no accelerator group is installed implicitly, so a
+# bare `uv sync` cannot put a CUDA torch on an AMD box. It does NOT make a
+# sync safe: `uv sync` is exact, so a bare one REMOVES the lane's packages
+# (torch included) from a working environment. A bare `uv run` syncs
+# inexactly and, with this lock as committed, changes nothing (every base
+# pin equals each lane's; checked with `uv export` per group), but it
+# re-locks when pyproject.toml has changed, and a re-lock can move pins the
+# lanes share (the cuda/rocm/metal groups conflict and share this one
+# lock). The rule, and why, is AGENTS.md's: every uv
+# invocation in an existing environment takes `--no-sync`; an environment
+# change is a separate human setup session (docs/dev-environment.md "Recovery"; the lanes are docs/hardware.md).
+# `drinkme bootstrap` picks the group on a fresh box (bootstrap.py); a
+# user never has to know this section exists.
+default-groups = []
+# one set: at most one of the four lanes in any resolution
+conflicts = [[{ group = "cuda" }, { group = "rocm" }, { group = "rocm-official" }, { group = "metal" }]]
+
+[[tool.uv.index]]
+name = "rocm-gfx1151"
+url = "https://rocm.nightlies.amd.com/v2/gfx1151/"
+explicit = true
+
+# the official PyTorch ROCm index, pinned to the bundled-runtime 7.1 build
+# (the rocm-official group's comment above says why not "stable")
+[[tool.uv.index]]
+name = "pytorch-rocm71"
+url = "https://download.pytorch.org/whl/rocm7.1"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "rocm-gfx1151", group = "rocm" },
+    { index = "pytorch-rocm71", group = "rocm-official" },
+]
+rocm = { index = "rocm-gfx1151", group = "rocm" }
+rocm-sdk-core = { index = "rocm-gfx1151", group = "rocm" }
+rocm-sdk-libraries-gfx1151 = { index = "rocm-gfx1151", group = "rocm" }
+triton = { index = "rocm-gfx1151", group = "rocm" }
+triton-rocm = { index = "pytorch-rocm71", group = "rocm-official" }
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# The sdist is the package, not the repo: without this hatchling ships every
+# tracked file (site/, bench/, docs/ — otherwise it measured 28 MB) around a
+# 316 KB wheel.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/drinkme", "lexicons", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drinkme"]
+
+# `drinkme publish` validates a record against the lexicon before sending
+# it. One file in the repo (lexicons/), carried into the wheel at a path
+# publish/validate.py looks at first; a checkout finds the repo copy.
+[tool.hatch.build.targets.wheel.force-include]
+"lexicons/wtf.petrichor.drinkme.measurement.json" = "drinkme/publish/lexicons/wtf.petrichor.drinkme.measurement.json"

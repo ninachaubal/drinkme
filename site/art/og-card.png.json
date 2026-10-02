@@ -1,0 +1,3 @@
+{
+  "prompt": "Browser-rendered social preview from site/art/make-og.html at 1200 by 630, using the site’s self-hosted Old Standard fonts and pre-existing public-domain Tenniel Alice cutout: the local-model memory benefit, lossless BF16 support, and OpenAI/Anthropic compatibility. No generative image model used. Its Qwen3.8-27B line (55 GB to 39 GB, enough for a 48 GB GPU), the hero's own example, is the Qwen3.8-27B sip record's footprints in the site's bundled records (stock_weights_gb 54.729 and compressed_weights_gb 39.485, vision tower included), the same numbers as the hero and the fit table. Rendered with headless Chromium."
+}

@@ -1,0 +1,8 @@
+{
+  "name": "drinkme-bench-node",
+  "private": true,
+  "description": "scratch install for bench/responses_sdk_smoke.mjs — `npm i` (or `bun install`) here; node_modules and lockfiles are ignored",
+  "dependencies": {
+    "openai": "^7.15.0"
+  }
+}

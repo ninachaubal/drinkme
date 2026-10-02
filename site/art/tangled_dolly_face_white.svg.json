@@ -1,0 +1,7 @@
+{
+  "prompt": "Sourced, not generated: Tangled's logo mark, Dolly's face ('Mark only'), from Tangled's brand page https://tangled.org/brand, element #asset-face-white (its download is tangled_dolly_face_white.svg). Fetched 2026-10-01. The element's inline SVG, saved as is, except that the page's Tailwind class attribute (w-full max-w-16 mx-auto) was dropped; no path, fill or viewBox was touched. Used in the footer link (on the dark footer) and the selected segment of the clone switch, on a dark fill.",
+  "source": "https://tangled.org/brand",
+  "fetched": "2026-10-01",
+  "licence": "Tangled's brand page permits using Dolly's face alone 'when a smaller 1:1 logo or icon is needed'. It states no licence for the artwork. The core repository (https://tangled.org/tangled.org/core) says 'The contents of this repository are licensed under MIT.' It is not confirmed that the MIT grant covers the logo. The footer says © 2026 Tangled Labs Oy.",
+  "createdAt": "2026-10-01"
+}

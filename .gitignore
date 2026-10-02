@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+.pytest_cache/
+.worktrees/
+*.egg-info/
+.DS_Store
+.env
+.ruff_cache/
+.mypy_cache/
+node_modules/
+*.log
+
+# impeccable skill state (review captures, question-server state, live preview: tool scratch, not source)
+.impeccable/
+
+# Local working directories, never committed
+notes/
+verification/
+# Created by `drinkme bench`: one lexicon-shaped record per run, yours to keep or publish.
+measurements/
+
+# bench/.node: the smoke script's scratch SDK install — package.json is tracked, nothing else
+bench/.node/package-lock.json
+bench/.node/bun.lock
+bench/.node/bun.lockb

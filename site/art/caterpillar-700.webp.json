@@ -1,0 +1,6 @@
+{
+  "prompt": "Sourced, public domain: John Tenniel, The Nursery \"Alice\" (Macmillan, 1890), the Blue Caterpillar on the mushroom with his hookah and Alice peeking over the cap, Tenniel's own hand-colouring (British Library Cup.410.g.74). Wikimedia Commons File:John Tenniel - Illustration from The Nursery Alice (1890) - c06543 03.jpg, the 1440x2000 original (sha1 92c594ee16efaec4668363e1bf6d53e246cd26ac). Commons has no transparent version of this plate, so site/art/make-caterpillar.py, 2026-09-23, cut it from its paper by processing alone: it flat-fields the paper's tone, turns the paper to alpha (the inverse of printing on white, so the plate reads as printed on the page's paper and has no edge), zeroes two hand-set regions (the page's top rule and Tenniel's monogram), and crops to the art. Alice is kept: she belongs to the plate. Nothing drawn, painted or generated. Resized to 700px wide (700x915), webp.",
+  "source": "https://commons.wikimedia.org/wiki/File:John_Tenniel_-_Illustration_from_The_Nursery_Alice_(1890)_-_c06543_03.jpg",
+  "licence": "Public domain (Commons: PD, author died more than 100 years ago; CC Public Domain Mark 1.0).",
+  "createdAt": "2026-09-23"
+}

@@ -1,0 +1,5 @@
+{
+  "what": "The site's icons (favicon.ico, art/favicon-32.png, apple-touch-icon.png): the DRINK ME bottle cut from the hero plate, stood upright on a rounded tile in the page's theme colour.",
+  "source": "art/alice-hero-1400.png — John Tenniel, The Nursery \"Alice\" (1890), hand-coloured; public domain. Provenance of the plate: art/alice-hero-1400.webp.json.",
+  "made_by": "art/make-favicon.py (a polygon keeps the tag and bottle and cuts Alice's hand away along the bottle's edge; a colour pass drops the last finger specks; rotated 22 degrees upright)."
+}

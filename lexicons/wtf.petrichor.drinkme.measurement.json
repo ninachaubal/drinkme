@@ -1,0 +1,229 @@
+{
+  "lexicon": 1,
+  "id": "wtf.petrichor.drinkme.measurement",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "One benchmark observation — a point on the curve — published to the participant's own repo; the DID that owns the repo is the identity. The record is self-contained: the hardware, the model, the compression and the measurements are inlined, so a consumer reads it without joining anything. The per-tensor bitwise round trip is a write-time gate in bench, never a field: a record whose packed tensors did not reconstruct their bf16 bytes exactly is not written.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "model",
+          "compression",
+          "environment",
+          "metrics",
+          "stock",
+          "createdAt",
+          "version"
+        ],
+        "properties": {
+          "model": {
+            "type": "ref",
+            "ref": "#model"
+          },
+          "compression": {
+            "type": "ref",
+            "ref": "#compression"
+          },
+          "environment": {
+            "type": "ref",
+            "ref": "#environment"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "ref",
+              "ref": "#metric"
+            },
+            "description": "Self-describing metrics, each a name, a decimal-string value (the median when samples are present) and a unit. The canonical names are stock_decode_tok_s, compressed_decode_tok_s, stock_prefill_tok_s, compressed_prefill_tok_s, stock_ttft_s, compressed_ttft_s, read_gb_s, copy_gb_s, stock_weights_gb and compressed_weights_gb: decode is tok/s over the timed decode reps, prefill is tok/s for a single forward over a fixed 512-token prompt (raw.prefill_prompt_len carries the exact length), ttft is seconds of wall time from request start to the first generated token on that same prompt (one prefill forward plus one decode step), read_gb_s and copy_gb_s are a pure read and a STREAM-convention copy (read+write) of a probe buffer on the empty device, and stock_weights_gb/compressed_weights_gb are the arm's weight footprint. GB and GB/s are decimal — 10^9 bytes and 10^9 bytes per second; raw.bandwidth keeps the bytes. What the *_weights_gb metrics measure depends on environment.platform: cuda and rocm report the caching allocator's live allocation right after the arm loaded (torch.cuda.memory_allocated), metal reports the engine's own resident-bytes accounting (the weights it holds, packed or raw); neither is the process's total or a working set with KV. The stock_* names (stock_weights_gb among them) are present iff stock.outcome == 'measured'. On torch the twin arm (bench's diagnostic arm: the uncompressed BF16 weights through the compressed arm's own kernels) also publishes twin_decode_tok_s and twin_weights_gb when it ran; its outcome is in raw, and on mlx it publishes no metric. On torch each arm that ran also publishes <arm>_decode_read_gb (stock_decode_read_gb, twin_decode_read_gb, compressed_decode_read_gb): the bytes one decode step reads from that arm's weights (its Linears, packed or raw, and one row of the token embedding; not the vision tower or the other embedding rows, which count in *_weights_gb), the denominator of the arm's bandwidth bound read_gb_s / <arm>_decode_read_gb. When the checkpoint has an MTP head, bench on torch also times decode with speculation on, as drinkme serve runs it for such a model (--spec mtp, the head proposing): <arm>_spec_decode_tok_s_<prompt> for arm stock and compressed and prompt agent (an agent transcript), chat (a chat turn) and code (a code edit), each tok/s over 256 new tokens, the median of that prompt's timed reps after one untimed warm-up. Present iff the checkpoint has an MTP head, the arm was measured and the runtime speculates (mlx does not, so metal records carry none)."
+          },
+          "stock": {
+            "type": "ref",
+            "ref": "#stock"
+          },
+          "raw": {
+            "type": "unknown",
+            "description": "bench's own working detail (samples, bandwidth bytes, bytes per token, pack counts, the twin arm, device_source — how detect() named the device, detector — the detector's working notes (its weight budget in bytes, whether the memory kind was a guess, its evidence and version), the per-arm kernel routing as <arm>_routing — the record environment.engine's kernel segments were composed from, host_load — the host's 1-minute load average before and after each arm's timed passes and its CPU count, spec — the speculation pass: the proposer, tokens, reps and context, each prompt's sha256 and token count, and per arm and prompt the samples and the mean tokens each verify step accepted; or why it did not run (no MTP head, a runtime that does not speculate, --no-spec), and unpublishable — why a local record cannot be published); diagnostic, never aggregated."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          },
+          "version": {
+            "type": "string",
+            "description": "The drinkme semver that produced this record, e.g. '1.0.0'. The codec is the major (bug fixes = patch, kernel updates = minor, codec/format updates = major), so numbers are only comparable within a major."
+          }
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "name",
+        "hfRepo",
+        "revision"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "hfRepo": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "The resolved HF commit the weights came from: the 40-hex sha of the one snapshot every arm and the tokenizer loaded, resolved by bench before any arm loaded (the pack's bound commit when the arm ran off a pack). Never the menu's coordinate, and never a local directory's structural digest — a checkpoint that is not a hub snapshot has no commit to name, so its record is written locally without this field and is not publishable (`drinkme publish` refuses it by name). Same model name at a different revision is a different cell."
+        }
+      }
+    },
+    "compression": {
+      "type": "object",
+      "required": [
+        "profile",
+        "bitsPerWeight"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "sip",
+            "gulp"
+          ],
+          "description": "The compression profile the compressed arm ran — `sip` (the default, faster) or `gulp` (smaller): exponent tiers, literal sign/mantissa, 1024-weight blocks. Read off the loaded arm or the loaded pack's meta.json `profile`, never typed into the bench; a pack is one profile, and a raw-fallback tensor beside the profile's tensors does not change it (docs/pack-format.md)."
+        },
+        "bitsPerWeight": {
+          "type": "string",
+          "description": "Weight-weighted bits per weight as a decimal string: total encoded payload bits of the packed population over its total number of weights. The population is the Linears the codec packed — the compressed arm's swapped tensors, exactly the trunk `drinkme pack` writes — and nothing else: the raw remainder (embeddings, norms, biases, sub-1024 projections) and an MTP head are excluded, so this is not a whole-model storage multiplier."
+        },
+        "meanTensorBitsPerWeight": {
+          "type": "string",
+          "description": "The unweighted mean of per-tensor bits per weight over the same packed population, as a decimal string — what a pack's meta.json calls meanBpw (/v1/models carries it under this name, as a number). A small projection and a large head count equally here; use bitsPerWeight for the model's bytes."
+        },
+        "packedBytes": {
+          "type": "integer",
+          "description": "The pack's bytes on disk (the npz sum), read off the loaded pack's meta.json — the number `drinkme pack` wrote. Present iff the compressed arm loaded a pack from disk (every mlx record; a torch record run with --pack-dir)."
+        },
+        "residentBytes": {
+          "type": "integer",
+          "description": "The pack's measured device footprint plus the raw remainder the loader streams, read off the loaded pack's meta.json — the number `drinkme pack` wrote. Present iff packedBytes is."
+        }
+      }
+    },
+    "stock": {
+      "type": "object",
+      "description": "The stock BF16 arm's outcome, and the one fact that explains a non-measured one: the budget a skip was judged against, or the error a failed load raised.",
+      "required": [
+        "outcome"
+      ],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "measured",
+            "skipped_predicted_nonfit",
+            "failed_load"
+          ],
+          "description": "`measured`: the pass ran and its stock_* metrics are present. `skipped_predicted_nonfit`: bench's stock-arm fit check (not the `drinkme check` verb) predicted a non-fit against budgetBytes and never attempted the load — a policy decision, not an observation; a different budget, loader or margin could fit. `failed_load`: the load was attempted and the live pre-allocation guard refused or the allocator raised out-of-memory. In both non-measured cases the stock_* metrics are omitted and the compressed arm still ran."
+        },
+        "budgetBytes": {
+          "type": "integer",
+          "description": "Present iff outcome == 'skipped_predicted_nonfit': the ceiling the fit check judged the stock arm's transient against, in bytes — physical memory on unified (environment.memoryBytes), the VRAM budget on discrete."
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Present iff outcome == 'failed_load': the refusal or allocator message, verbatim, truncated to 2048 bytes."
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "description": "The hardware the arms ran on, class-first: `deviceClass` is how owners self-identify ('Apple M3 Max', 'NVIDIA GeForce RTX 4090', or on a Linux APU the CPU brand string, 'AMD RYZEN AI MAX+ 395 w/ Radeon 8060S', because the GPU name identifies nothing retail), `memoryBytes` and `memoryKind` the pool the model lives in, `cpuInfo` and `gpuInfo` the detectors' verbatim strings so a normalization mistake is repairable without re-runs, `engine` and `platform` the runtime that ran the arms and the compute platform it ran on. The device's bandwidth is measured, not quoted: read_gb_s in metrics[].",
+      "required": [
+        "deviceClass",
+        "memoryBytes",
+        "memoryKind"
+      ],
+      "properties": {
+        "deviceClass": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Normalized class string."
+        },
+        "memoryBytes": {
+          "type": "integer",
+          "description": "Capacity of the memory the model lives in, in bytes — the pool `memoryKind` names, as the detector read it."
+        },
+        "memoryKind": {
+          "type": "string",
+          "enum": [
+            "vram",
+            "unified"
+          ],
+          "description": "`vram`: a discrete accelerator's own memory pool; `unified`: one pool shared with the CPU (Apple silicon, AMD APUs, GB10/Jetson)."
+        },
+        "cpuInfo": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Verbatim."
+        },
+        "gpuInfo": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Verbatim."
+        },
+        "os": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "engine": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "What ran the arms, one grammar, slash-separated segments each starting with its noun so the string is greppable by segment. After the version-carrying segments (drinkme, then the runtime), every kernel segment is `<noun> <impl>[ <version>]`, where <impl> names the implementation that ran or is `none`, and an impl that carries a version carries it in every segment that names it: `drinkme <semver> / torch <version>[+<accel tag>] / deltanet <fla <ver> | torch | none> / conv <fla <ver> | torch | none> / narrow-gemv <triton | torch> / stock-gemv <mv | linear | triton> / raw-gemv <twin | stock>[ / decode <eager | cudagraph>]` for the torch runtime (the runtime version is torch.__version__ verbatim, accelerator tag included; deltanet is the DeltaNet decode recurrence kernel every arm ran — fla's fused Triton kernel with fla's version, the torch recurrence, or none for a model without DeltaNet layers; conv is the prefill convolution kernel every arm ran — fla's time-major Triton kernel with fla's version, the torch conv1d fallback, or none, which must agree with deltanet; narrow-gemv is what ran the raw Linears under the codec's row threshold — triton for drinkme's Triton GEMV, torch for F.linear under DRINKME_NARROW_GEMV=0; stock-gemv is the one-row call of the raw Linears at or above it, every Linear of the stock arm — mv for torch.mv with the Lt BLAS library preferred for the call (hipBLASLt on ROCm), linear for F.linear on PyTorch's default library, triton for the twin arm's Triton GEMV over the raw BF16 weight; raw-gemv is the one-row call of the raw Linears at or above it that the compressed and twin arms hold (a tied lm_head) — twin for the twin arm's Triton GEMV over the raw BF16 weight, stock for the stock-gemv call; decode is the step path the decode figures ran on — cudagraph when every arm replayed a captured CUDA graph, eager otherwise; a record without it decoded eager), and `drinkme <semver> / mlx <version>` for the mlx runtime (environment.platform says metal). The kernel segments are read off the routing record the arms agreed on — arms that routed differently write no record — so one string names the runtime for every number in the record. Within a major version, new segments may be appended to the end of either form; existing segments do not change meaning. E.g. 'drinkme 1.0.0 / torch 2.12.0+rocm7.1 / deltanet fla 0.5.2 / conv fla 0.5.2 / narrow-gemv triton / stock-gemv mv / raw-gemv twin'."
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "cuda",
+            "rocm",
+            "metal"
+          ],
+          "description": "The compute platform that executed the decode: `cuda` or `rocm` (the torch runtime), `metal` (the mlx runtime)."
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": [
+        "name",
+        "value",
+        "unit"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "value": {
+          "type": "string",
+          "description": "Decimal string (lexicon has no float); the median when samples are present."
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every timed sample (bench runs three timed reps per arm after one untimed warm-up rep; raw.warmup_rep says whether the warm-up ran)."
+        }
+      }
+    }
+  }
+}

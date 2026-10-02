@@ -1,0 +1,7 @@
+{
+  "prompt": "Sourced, not generated: GitHub's official Invertocat logo, GitHub_Invertocat_White.svg from GitHub's logo kit, https://brand.github.com/GitHub_Logos.zip (SVG folder). Fetched 2026-10-01. Used unmodified: the file is byte for byte as GitHub ships it.",
+  "source": "https://github.com/logos",
+  "fetched": "2026-10-01",
+  "licence": "GitHub's logo page (https://github.com/logos), fetched 2026-10-01, says: 'Link to GitHub: Use a permitted GitHub logo to link to GitHub.' and 'Do not modify the permitted GitHub logos, including changing the color, dimensions, or combining with other words or design elements.' Used here only as the link to the mirror repository on GitHub, and on the selected segment of the clone switch, where GitHub's white variant sits on a dark fill.",
+  "createdAt": "2026-10-01"
+}

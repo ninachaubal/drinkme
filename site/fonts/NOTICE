@@ -1,0 +1,5 @@
+Self-hosted fonts (no third-party calls at launch). All under the SIL Open
+Font License 1.1; the license text is OFL.txt in this directory.
+
+- Old Standard TT — Copyright (c) 2011, Alexey Kryukov. Regular, Bold, Italic
+  (latin subset woff2, from fonts.gstatic.com, 2026-09-01).
