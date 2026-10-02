@@ -2560,7 +2560,7 @@
   },
   {
    "$type": "wtf.petrichor.drinkme.measurement",
-   "createdAt": "2026-09-29T11:21:53.945601+00:00",
+   "createdAt": "2026-10-02T19:37:07.882979+00:00",
    "version": "1.0.0",
    "environment": {
     "deviceClass": "Apple M4",
@@ -2575,32 +2575,32 @@
    "metrics": [
     {
      "name": "stock_decode_tok_s",
-     "value": "27.71",
+     "value": "28.32",
      "unit": "tok/s",
      "samples": [
-      "27.64",
-      "27.71",
-      "27.81"
+      "28.25",
+      "28.32",
+      "28.58"
      ]
     },
     {
      "name": "stock_prefill_tok_s",
-     "value": "1212.32",
+     "value": "1213.05",
      "unit": "tok/s",
      "samples": [
-      "1212.32",
-      "1213.83",
-      "1210.23"
+      "1213.23",
+      "1212.15",
+      "1213.05"
      ]
     },
     {
      "name": "stock_ttft_s",
-     "value": "0.4222",
+     "value": "0.422",
      "unit": "s",
      "samples": [
+      "0.422",
       "0.4219",
-      "0.4222",
-      "0.4222"
+      "0.422"
      ]
     },
     {
@@ -2609,47 +2609,57 @@
      "unit": "GB"
     },
     {
+     "name": "stock_decode_read_gb",
+     "value": "3.441",
+     "unit": "GB"
+    },
+    {
      "name": "compressed_decode_tok_s",
-     "value": "33.59",
+     "value": "34.24",
      "unit": "tok/s",
      "samples": [
-      "33.62",
-      "33.58",
-      "33.59"
+      "34.34",
+      "34.18",
+      "34.24"
      ]
     },
     {
      "name": "compressed_prefill_tok_s",
-     "value": "1094.28",
+     "value": "1089.87",
      "unit": "tok/s",
      "samples": [
-      "1094.28",
-      "1094.82",
-      "1094.09"
+      "1089.87",
+      "1090.47",
+      "1089.73"
      ]
     },
     {
      "name": "compressed_ttft_s",
-     "value": "0.4684",
+     "value": "0.4694",
      "unit": "s",
      "samples": [
-      "0.4685",
-      "0.4684",
-      "0.4679"
+      "0.4707",
+      "0.4694",
+      "0.4693"
      ]
     },
     {
      "name": "read_gb_s",
-     "value": "104.114",
+     "value": "107.225",
      "unit": "GB/s"
     },
     {
      "name": "copy_gb_s",
-     "value": "98.094",
+     "value": "99.035",
      "unit": "GB/s"
     },
     {
      "name": "compressed_weights_gb",
+     "value": "2.607",
+     "unit": "GB"
+    },
+    {
+     "name": "compressed_decode_read_gb",
      "value": "2.607",
      "unit": "GB"
     }
@@ -2670,18 +2680,20 @@
     "outcome": "measured"
    },
    "site": {
-    "source": "measurements/qwen3-1.7b_apple-m4_2026-09-29_2.json",
+    "source": "measurements/qwen3-1.7b_apple-m4_2026-10-02.json",
     "at": {
      "stock_decode_tok_s": "/metrics/0/value",
      "stock_prefill_tok_s": "/metrics/1/value",
      "stock_ttft_s": "/metrics/2/value",
      "stock_weights_gb": "/metrics/3/value",
-     "compressed_decode_tok_s": "/metrics/4/value",
-     "compressed_prefill_tok_s": "/metrics/5/value",
-     "compressed_ttft_s": "/metrics/6/value",
-     "read_gb_s": "/metrics/7/value",
-     "copy_gb_s": "/metrics/8/value",
-     "compressed_weights_gb": "/metrics/9/value",
+     "stock_decode_read_gb": "/metrics/4/value",
+     "compressed_decode_tok_s": "/metrics/5/value",
+     "compressed_prefill_tok_s": "/metrics/6/value",
+     "compressed_ttft_s": "/metrics/7/value",
+     "read_gb_s": "/metrics/8/value",
+     "copy_gb_s": "/metrics/9/value",
+     "compressed_weights_gb": "/metrics/10/value",
+     "compressed_decode_read_gb": "/metrics/11/value",
      "bitsPerWeight": "/compression/bitsPerWeight",
      "meanTensorBitsPerWeight": "/compression/meanTensorBitsPerWeight",
      "stock.outcome": "/stock/outcome",
@@ -2693,7 +2705,7 @@
   },
   {
    "$type": "wtf.petrichor.drinkme.measurement",
-   "createdAt": "2026-10-01T08:51:12.153068+00:00",
+   "createdAt": "2026-10-02T19:38:42.184185+00:00",
    "version": "1.0.0",
    "environment": {
     "deviceClass": "Apple M4",
@@ -2708,32 +2720,32 @@
    "metrics": [
     {
      "name": "stock_decode_tok_s",
-     "value": "27.45",
+     "value": "28.6",
      "unit": "tok/s",
      "samples": [
-      "27.64",
-      "27.36",
-      "27.45"
+      "28.6",
+      "28.5",
+      "28.6"
      ]
     },
     {
      "name": "stock_prefill_tok_s",
-     "value": "1212.96",
+     "value": "1213.56",
      "unit": "tok/s",
      "samples": [
-      "1213.1",
-      "1212.96",
-      "1211.42"
+      "1213.56",
+      "1213.56",
+      "1212.36"
      ]
     },
     {
      "name": "stock_ttft_s",
-     "value": "0.4226",
+     "value": "0.4221",
      "unit": "s",
      "samples": [
-      "0.4218",
-      "0.4226",
-      "0.4226"
+      "0.4221",
+      "0.4221",
+      "0.422"
      ]
     },
     {
@@ -2742,48 +2754,58 @@
      "unit": "GB"
     },
     {
+     "name": "stock_decode_read_gb",
+     "value": "3.441",
+     "unit": "GB"
+    },
+    {
      "name": "compressed_decode_tok_s",
-     "value": "28.73",
+     "value": "29.02",
      "unit": "tok/s",
      "samples": [
-      "28.73",
-      "28.69",
-      "28.74"
+      "28.94",
+      "29.02",
+      "29.04"
      ]
     },
     {
      "name": "compressed_prefill_tok_s",
-     "value": "1094.79",
+     "value": "1092.06",
      "unit": "tok/s",
      "samples": [
-      "1094.61",
-      "1094.79",
-      "1095.91"
+      "1091.93",
+      "1092.07",
+      "1092.06"
      ]
     },
     {
      "name": "compressed_ttft_s",
-     "value": "0.4674",
+     "value": "0.4688",
      "unit": "s",
      "samples": [
-      "0.4679",
-      "0.4674",
-      "0.4672"
+      "0.4688",
+      "0.4701",
+      "0.4688"
      ]
     },
     {
      "name": "read_gb_s",
-     "value": "104.211",
+     "value": "106.676",
      "unit": "GB/s"
     },
     {
      "name": "copy_gb_s",
-     "value": "96.332",
+     "value": "100.471",
      "unit": "GB/s"
     },
     {
      "name": "compressed_weights_gb",
      "value": "2.529",
+     "unit": "GB"
+    },
+    {
+     "name": "compressed_decode_read_gb",
+     "value": "2.528",
      "unit": "GB"
     }
    ],
@@ -2803,18 +2825,20 @@
     "outcome": "measured"
    },
    "site": {
-    "source": "measurements/qwen3-1.7b_apple-m4_2026-10-01_gulp.json",
+    "source": "measurements/qwen3-1.7b_apple-m4_2026-10-02_gulp.json",
     "at": {
      "stock_decode_tok_s": "/metrics/0/value",
      "stock_prefill_tok_s": "/metrics/1/value",
      "stock_ttft_s": "/metrics/2/value",
      "stock_weights_gb": "/metrics/3/value",
-     "compressed_decode_tok_s": "/metrics/4/value",
-     "compressed_prefill_tok_s": "/metrics/5/value",
-     "compressed_ttft_s": "/metrics/6/value",
-     "read_gb_s": "/metrics/7/value",
-     "copy_gb_s": "/metrics/8/value",
-     "compressed_weights_gb": "/metrics/9/value",
+     "stock_decode_read_gb": "/metrics/4/value",
+     "compressed_decode_tok_s": "/metrics/5/value",
+     "compressed_prefill_tok_s": "/metrics/6/value",
+     "compressed_ttft_s": "/metrics/7/value",
+     "read_gb_s": "/metrics/8/value",
+     "copy_gb_s": "/metrics/9/value",
+     "compressed_weights_gb": "/metrics/10/value",
+     "compressed_decode_read_gb": "/metrics/11/value",
      "bitsPerWeight": "/compression/bitsPerWeight",
      "meanTensorBitsPerWeight": "/compression/meanTensorBitsPerWeight",
      "stock.outcome": "/stock/outcome",
@@ -3498,7 +3522,7 @@
   },
   {
    "$type": "wtf.petrichor.drinkme.measurement",
-   "createdAt": "2026-09-29T11:28:30.513256+00:00",
+   "createdAt": "2026-10-02T19:41:49.235595+00:00",
    "version": "1.0.0",
    "environment": {
     "deviceClass": "Apple M4",
@@ -3513,32 +3537,32 @@
    "metrics": [
     {
      "name": "stock_decode_tok_s",
-     "value": "12.08",
+     "value": "12.42",
      "unit": "tok/s",
      "samples": [
-      "12.08",
-      "12.05",
-      "12.08"
+      "12.42",
+      "12.41",
+      "12.42"
      ]
     },
     {
      "name": "stock_prefill_tok_s",
-     "value": "471.34",
+     "value": "469.53",
      "unit": "tok/s",
      "samples": [
-      "471.52",
-      "471.34",
-      "470.81"
+      "469.73",
+      "469.37",
+      "469.53"
      ]
     },
     {
      "name": "stock_ttft_s",
-     "value": "1.0875",
+     "value": "1.09",
      "unit": "s",
      "samples": [
-      "1.0875",
-      "1.0887",
-      "1.0866"
+      "1.0907",
+      "1.09",
+      "1.0894"
      ]
     },
     {
@@ -3547,47 +3571,57 @@
      "unit": "GB"
     },
     {
+     "name": "stock_decode_read_gb",
+     "value": "8.045",
+     "unit": "GB"
+    },
+    {
      "name": "compressed_decode_tok_s",
-     "value": "15.24",
+     "value": "15.53",
      "unit": "tok/s",
      "samples": [
-      "15.22",
-      "15.24",
-      "15.28"
+      "15.53",
+      "15.53",
+      "15.59"
      ]
     },
     {
      "name": "compressed_prefill_tok_s",
-     "value": "422.44",
+     "value": "421.4",
      "unit": "tok/s",
      "samples": [
-      "422.44",
-      "421.75",
-      "422.58"
+      "421.47",
+      "421.35",
+      "421.4"
      ]
     },
     {
      "name": "compressed_ttft_s",
-     "value": "1.2111",
+     "value": "1.2151",
      "unit": "s",
      "samples": [
-      "1.2107",
-      "1.2142",
-      "1.2111"
+      "1.2151",
+      "1.2145",
+      "1.2179"
      ]
     },
     {
      "name": "read_gb_s",
-     "value": "103.939",
+     "value": "101.056",
      "unit": "GB/s"
     },
     {
      "name": "copy_gb_s",
-     "value": "82.572",
+     "value": "97.984",
      "unit": "GB/s"
     },
     {
      "name": "compressed_weights_gb",
+     "value": "5.92",
+     "unit": "GB"
+    },
+    {
+     "name": "compressed_decode_read_gb",
      "value": "5.92",
      "unit": "GB"
     }
@@ -3608,18 +3642,20 @@
     "outcome": "measured"
    },
    "site": {
-    "source": "measurements/qwen3-4b_apple-m4_2026-09-29_2.json",
+    "source": "measurements/qwen3-4b_apple-m4_2026-10-02.json",
     "at": {
      "stock_decode_tok_s": "/metrics/0/value",
      "stock_prefill_tok_s": "/metrics/1/value",
      "stock_ttft_s": "/metrics/2/value",
      "stock_weights_gb": "/metrics/3/value",
-     "compressed_decode_tok_s": "/metrics/4/value",
-     "compressed_prefill_tok_s": "/metrics/5/value",
-     "compressed_ttft_s": "/metrics/6/value",
-     "read_gb_s": "/metrics/7/value",
-     "copy_gb_s": "/metrics/8/value",
-     "compressed_weights_gb": "/metrics/9/value",
+     "stock_decode_read_gb": "/metrics/4/value",
+     "compressed_decode_tok_s": "/metrics/5/value",
+     "compressed_prefill_tok_s": "/metrics/6/value",
+     "compressed_ttft_s": "/metrics/7/value",
+     "read_gb_s": "/metrics/8/value",
+     "copy_gb_s": "/metrics/9/value",
+     "compressed_weights_gb": "/metrics/10/value",
+     "compressed_decode_read_gb": "/metrics/11/value",
      "bitsPerWeight": "/compression/bitsPerWeight",
      "meanTensorBitsPerWeight": "/compression/meanTensorBitsPerWeight",
      "stock.outcome": "/stock/outcome",
@@ -3631,7 +3667,7 @@
   },
   {
    "$type": "wtf.petrichor.drinkme.measurement",
-   "createdAt": "2026-10-01T08:45:50.715967+00:00",
+   "createdAt": "2026-10-02T20:08:56.279768+00:00",
    "version": "1.0.0",
    "environment": {
     "deviceClass": "Apple M4",
@@ -3646,32 +3682,32 @@
    "metrics": [
     {
      "name": "stock_decode_tok_s",
-     "value": "12.0",
+     "value": "12.47",
      "unit": "tok/s",
      "samples": [
-      "12.0",
-      "12.01",
-      "12.0"
+      "12.51",
+      "12.47",
+      "12.4"
      ]
     },
     {
      "name": "stock_prefill_tok_s",
-     "value": "471.73",
+     "value": "470.1",
      "unit": "tok/s",
      "samples": [
-      "471.95",
-      "471.56",
-      "471.73"
+      "470.31",
+      "470.1",
+      "469.87"
      ]
     },
     {
      "name": "stock_ttft_s",
-     "value": "1.0862",
+     "value": "1.0893",
      "unit": "s",
      "samples": [
-      "1.0862",
-      "1.0843",
-      "1.088"
+      "1.0893",
+      "1.09",
+      "1.0891"
      ]
     },
     {
@@ -3680,47 +3716,57 @@
      "unit": "GB"
     },
     {
+     "name": "stock_decode_read_gb",
+     "value": "8.045",
+     "unit": "GB"
+    },
+    {
      "name": "compressed_decode_tok_s",
-     "value": "12.3",
+     "value": "12.46",
      "unit": "tok/s",
      "samples": [
-      "12.3",
-      "12.29",
-      "12.3"
+      "12.46",
+      "12.46",
+      "12.51"
      ]
     },
     {
      "name": "compressed_prefill_tok_s",
-     "value": "423.55",
+     "value": "423.24",
      "unit": "tok/s",
      "samples": [
-      "422.75",
-      "424.03",
-      "423.55"
+      "421.8",
+      "423.24",
+      "423.43"
      ]
     },
     {
      "name": "compressed_ttft_s",
-     "value": "1.2211",
+     "value": "1.2108",
      "unit": "s",
      "samples": [
-      "1.211",
-      "1.2211",
-      "1.2291"
+      "1.2108",
+      "1.2109",
+      "1.2099"
      ]
     },
     {
      "name": "read_gb_s",
-     "value": "102.846",
+     "value": "105.966",
      "unit": "GB/s"
     },
     {
      "name": "copy_gb_s",
-     "value": "96.973",
+     "value": "100.689",
      "unit": "GB/s"
     },
     {
      "name": "compressed_weights_gb",
+     "value": "5.725",
+     "unit": "GB"
+    },
+    {
+     "name": "compressed_decode_read_gb",
      "value": "5.725",
      "unit": "GB"
     }
@@ -3741,18 +3787,20 @@
     "outcome": "measured"
    },
    "site": {
-    "source": "measurements/qwen3-4b_apple-m4_2026-10-01_gulp.json",
+    "source": "measurements/qwen3-4b_apple-m4_2026-10-02_gulp.json",
     "at": {
      "stock_decode_tok_s": "/metrics/0/value",
      "stock_prefill_tok_s": "/metrics/1/value",
      "stock_ttft_s": "/metrics/2/value",
      "stock_weights_gb": "/metrics/3/value",
-     "compressed_decode_tok_s": "/metrics/4/value",
-     "compressed_prefill_tok_s": "/metrics/5/value",
-     "compressed_ttft_s": "/metrics/6/value",
-     "read_gb_s": "/metrics/7/value",
-     "copy_gb_s": "/metrics/8/value",
-     "compressed_weights_gb": "/metrics/9/value",
+     "stock_decode_read_gb": "/metrics/4/value",
+     "compressed_decode_tok_s": "/metrics/5/value",
+     "compressed_prefill_tok_s": "/metrics/6/value",
+     "compressed_ttft_s": "/metrics/7/value",
+     "read_gb_s": "/metrics/8/value",
+     "copy_gb_s": "/metrics/9/value",
+     "compressed_weights_gb": "/metrics/10/value",
+     "compressed_decode_read_gb": "/metrics/11/value",
      "bitsPerWeight": "/compression/bitsPerWeight",
      "meanTensorBitsPerWeight": "/compression/meanTensorBitsPerWeight",
      "stock.outcome": "/stock/outcome",

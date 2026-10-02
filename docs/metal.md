@@ -2,7 +2,7 @@
 
 The BF16 kernels pass bit-exact checks on Apple silicon, and whole-model BF16
 serving runs on it. On an M4 with 24 GB, Qwen3-1.7B decodes 1.21× and
-Qwen3-4B 1.26× as fast as MLX-LM's BF16 (33.59 vs 27.71 and 15.24 vs 12.08
+Qwen3-4B 1.25× as fast as MLX-LM's BF16 (34.24 vs 28.32 and 15.53 vs 12.42
 tok/s), bit-exact. Other model families, the 8B and larger on this machine,
 and speculation on MLX remain in progress. Metal records publish like any other
 ([local records](bench.md#local-records)). This page

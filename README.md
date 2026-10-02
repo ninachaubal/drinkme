@@ -38,7 +38,7 @@ untested.
 
 Apple silicon uses MLX/Metal (install lane `metal`). On an M4 with 24 GB,
 drinkme has served and benched Qwen3-1.7B and Qwen3-4B end to end, bit for bit
-against the source: 1.21× and 1.26× MLX-LM's BF16 decode speed. Other model
+against the source: 1.21× and 1.25× MLX-LM's BF16 decode speed. Other model
 families, the 8B and larger on that machine, and speculation on MLX are still
 in progress. See [Apple silicon status](docs/metal.md).
 
