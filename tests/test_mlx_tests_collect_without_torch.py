@@ -16,6 +16,9 @@ is_torch_available() probe sees), so a future module-scope `import torch`
 in either file fails HERE, in a few seconds on any box, instead of on the
 Mac a day later. It does not need mlx: --collect-only never imports mlx.core,
 it only imports the test modules themselves.
+
+tests/test_decode_read_mlx.py is held to the same rule: its mlx test is the
+Mac's check of the MLX bench's decode-read walk.
 """
 
 import os
@@ -26,17 +29,18 @@ import textwrap
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-FILES = ["test_pack_identity.py", "test_identity_torch_free.py"]
+FILES = ["test_pack_identity.py", "test_identity_torch_free.py", "test_decode_read_mlx.py"]
 MLX_TEST_IDS = [
     "test_pack_identity.py::test_pack_from_A_served_with_B_is_refused_on_the_mlx_lane",
     "test_identity_torch_free.py::test_the_compressed_mlx_loader_runs_with_torch_blocked",
+    "test_decode_read_mlx.py::test_the_mlx_walk_gives_qwen3_1_7b_the_same_dict",
 ]
 
 
-def test_both_mlx_gated_files_collect_with_torch_blocked():
-    """`pytest --collect-only -q` on both files, torch blocked, from a fresh
-    interpreter: exit 0, and both files' mlx test ids are in the collected
-    list. A module-scope `import torch` in either file fails its COLLECTION
+def test_the_mlx_gated_files_collect_with_torch_blocked():
+    """`pytest --collect-only -q` on FILES, torch blocked, from a fresh
+    interpreter: exit 0, and every file's mlx test id is in the collected
+    list. A module-scope `import torch` in any of them fails its COLLECTION
     outright."""
     env = {**os.environ, "PYTHONPATH": SRC + os.pathsep + os.environ.get("PYTHONPATH", ""),
            "OMP_NUM_THREADS": "4", "MKL_NUM_THREADS": "4"}
@@ -44,7 +48,7 @@ def test_both_mlx_gated_files_collect_with_torch_blocked():
         import sys
         sys.modules["torch"] = None
         import pytest
-        raise SystemExit(pytest.main(["--collect-only", "-q", {FILES[0]!r}, {FILES[1]!r}]))
+        raise SystemExit(pytest.main(["--collect-only", "-q", *{FILES!r}]))
         """)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                        cwd=TESTS_DIR, env=env, timeout=120)
