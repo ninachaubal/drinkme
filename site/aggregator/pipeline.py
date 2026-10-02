@@ -32,7 +32,11 @@ The filters, in order (a record is excluded by the first it fails):
   arm's bound x `tolerance`, the most one verify step can emit. The bytes are the record's
   `<arm>_decode_read_gb` (the Linears plus one embedding row: not a vision
   tower, which decode never reads; the lexicon's `metrics` description).
-  Checked for every
+  A record without that metric (the Apple silicon bench does not record it
+  yet) is checked against the arm's resident footprint, `<arm>_weights_gb`:
+  that is the larger number, so its bound is the stricter one. A
+  `<arm>_decode_read_gb` that is present but not a positive number gets no
+  fallback; the arm is uncheckable. Checked for every
   arm the record claims a decode speed for: the compressed arm and, when
   they ran, the stock arm and the twin (bench's diagnostic arm, which the
   page does not show; a record with any arm faster than physics allows did
@@ -192,12 +196,14 @@ def _arms(value: dict):
     return arms
 
 
-def bound_bytes_name(arm: str) -> str:
+def bound_bytes_name(m: dict, arm: str) -> str:
     """The metric an arm's bandwidth bound divides by: `<arm>_decode_read_gb`,
-    the bytes one decode step reads (not `<arm>_weights_gb`, the resident
-    footprint, which also counts a vision tower and the embedding rows a
-    step does not read)."""
-    return f"{arm}_decode_read_gb"
+    the bytes one decode step reads, when the record carries it; else
+    `<arm>_weights_gb`, the arm's resident footprint (which also counts a
+    vision tower and the embedding rows a step does not read, so the bound
+    is stricter). Apple silicon records carry no decode-read figure yet."""
+    read = f"{arm}_decode_read_gb"
+    return read if read in m else f"{arm}_weights_gb"
 
 
 def f3_physics(value: dict, tolerance: float):
@@ -205,7 +211,7 @@ def f3_physics(value: dict, tolerance: float):
     for arm, tok_name in _arms(value):
         if tok_name not in m and arm == "compressed":
             continue  # claims no compressed speed: plots nothing, nothing to check
-        gb_name = bound_bytes_name(arm)
+        gb_name = bound_bytes_name(m, arm)
         tok, read, gb = _num(m.get(tok_name)), _num(m.get("read_gb_s")), _num(m.get(gb_name))
         if tok is None or read is None or gb is None or read <= 0 or gb <= 0:
             return (f"physics uncheckable: the {arm} arm claims {tok_name} without a positive "
@@ -225,7 +231,7 @@ def _f3_speculation(m: dict, tolerance: float):
     """Every `<arm>_spec_decode_tok_s_<prompt>` the record carries against
     (SPEC_DEPTH + 1) x the arm's plain-decode bound x tolerance."""
     for arm in SPEC_ARMS:
-        gb_name = bound_bytes_name(arm)
+        gb_name = bound_bytes_name(m, arm)
         for prompt in SPEC_PROMPTS:
             name = f"{arm}_spec_decode_tok_s_{prompt}"
             if name not in m:
@@ -279,7 +285,7 @@ def baseline_efficiency(value: dict, arm: str = "stock") -> dict | None:
     if not a.loaded(value):
         return None
     m = _metrics(value)
-    gb_name = bound_bytes_name(arm)
+    gb_name = bound_bytes_name(m, arm)
     tok, read, gb = _num(m.get(a.tok_s)), _num(m.get("read_gb_s")), _num(m.get(gb_name))
     if tok is None or read is None or gb is None or read <= 0 or gb <= 0:
         return None

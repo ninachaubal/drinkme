@@ -114,9 +114,9 @@ def test_f3_excludes_a_twin_arm_faster_than_its_bandwidth_allows():
     assert e["filter"] == "F3" and e["numbers"]["arm"] == "twin"
     assert e["numbers"]["bound_tok_s"] == pytest.approx(239.3 / 16.417, abs=1e-3)
     assert run(rec(twin="12.36"))[1] == []
-    # uncheckable without its decode-read bytes
+    # uncheckable without its decode-read bytes AND its weights (nothing to fall back to)
     e = only_exclusion(edit(rec(twin="12.36"), lambda v: v.__setitem__(
-        "metrics", [m for m in v["metrics"] if m["name"] != "twin_decode_read_gb"])))
+        "metrics", [m for m in v["metrics"] if m["name"] not in ("twin_decode_read_gb", "twin_weights_gb")])))
     assert e["filter"] == "F3" and "uncheckable" in e["reason"] and e["numbers"]["arm"] == "twin"
 
 
@@ -128,11 +128,34 @@ def test_f3_tolerance_is_a_setting():
     lambda v: v["metrics"].__setitem__(1, {"name": "read_gb_s", "value": "0", "unit": "GB/s"}),
     lambda v: v.__setitem__("metrics", [dict(m, value="NaN") if m["name"] == "compressed_decode_read_gb"
                                         else m for m in v["metrics"]]),
-    lambda v: v.__setitem__("metrics", [m for m in v["metrics"] if m["name"] != "stock_decode_read_gb"]),
+    lambda v: v.__setitem__("metrics", [m for m in v["metrics"]
+                                        if m["name"] not in ("stock_decode_read_gb", "stock_weights_gb")]),
 ])
 def test_f3_excludes_an_arm_whose_claim_cannot_be_checked(fn):
     e = only_exclusion(edit(rec(), fn))
     assert e["filter"] == "F3" and "uncheckable" in e["reason"]
+
+
+def without_decode_read(r):
+    """An Apple-silicon-shaped record: no `<arm>_decode_read_gb` for any arm."""
+    return edit(r, lambda v: v.__setitem__(
+        "metrics", [m for m in v["metrics"] if not m["name"].endswith("_decode_read_gb")]))
+
+
+def test_f3_falls_back_to_weights_when_a_record_has_no_decode_read():
+    # the published M4 4B sip record's numbers: 15.24 and 12.08 tok/s over 103.939 GB/s
+    m4 = dict(read="103.939", comp="15.24", stock="12.08", comp_gb="5.92", stock_gb="8.045", platform="metal")
+    assert run(without_decode_read(rec(**m4)))[1] == []
+    b = pipeline.baseline_efficiency(without_decode_read(rec(**m4))["value"])
+    assert b["bound_tok_s"] == pytest.approx(103.939 / 8.045, abs=1e-3)
+
+
+def test_f3_the_weights_fallback_still_excludes_a_record_over_its_bound():
+    # 239.3 GB/s over 16.0 GB of weights: bound 14.96 tok/s, 16.45 at 1.10; 18 is over it,
+    # and the reason names the weights figure the bound came from
+    e = only_exclusion(without_decode_read(rec(comp="18.0", comp_gb="16.0")))
+    assert e["filter"] == "F3" and e["numbers"]["arm"] == "compressed"
+    assert "compressed_weights_gb" in e["reason"]
 
 
 def test_f3_checks_a_fit_points_compressed_arm_only():
@@ -179,7 +202,7 @@ def test_f3_excludes_a_speculation_metric_at_six_times_its_arms_bound():
 
 def test_f3_a_speculation_metric_with_no_bound_for_its_arm_is_uncheckable():
     # a fit-point-shaped stock arm (no plain decode, no bound) that still claims speculation
-    r = spec_rec(drop=("stock_decode_read_gb", "stock_decode_tok_s"))
+    r = spec_rec(drop=("stock_decode_read_gb", "stock_weights_gb", "stock_decode_tok_s"))
     e = only_exclusion(edit(r, lambda v: v.__setitem__("stock", {"outcome": "skipped_predicted_nonfit"})))
     assert e["filter"] == "F3" and "uncheckable" in e["reason"]
     assert e["numbers"]["arm"] == "stock" and "stock_spec_decode_tok_s" in e["reason"]
