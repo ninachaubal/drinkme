@@ -308,7 +308,15 @@ def test_reconcile_runs_on_its_timer_inside_follow(tmp_path, monkeypatch, run_fo
     assert len(calls) == 1
     now[0] = 100.0                                            # a day later, in miniature
     until(lambda: len(calls) == 2)
-    assert json.loads((tmp_path / "state" / "cursor.json").read_text())["reconciledAt"] == 100.0
+    # reconcile stamps reconciledAt after its backfill returns, so wait for the stamp, not the call
+    cursor = tmp_path / "state" / "cursor.json"
+
+    def stamped():
+        try:
+            return json.loads(cursor.read_text())["reconciledAt"] == 100.0
+        except (OSError, ValueError):
+            return False
+    assert until(stamped)
     jet.close()
 
 
