@@ -32,8 +32,9 @@ The filters, in order (a record is excluded by the first it fails):
   arm's bound x `tolerance`, the most one verify step can emit. The bytes are the record's
   `<arm>_decode_read_gb` (the Linears plus one embedding row: not a vision
   tower, which decode never reads; the lexicon's `metrics` description).
-  A record without that metric (the Apple silicon bench does not record it
-  yet) is checked against the arm's resident footprint, `<arm>_weights_gb`:
+  A record without that metric (an Apple silicon record from before the MLX
+  bench recorded it, arms_mlx.decode_read_bytes) is checked against the
+  arm's resident footprint, `<arm>_weights_gb`:
   that is the larger number, so its bound is the stricter one. A
   `<arm>_decode_read_gb` that is present but not a positive number gets no
   fallback; the arm is uncheckable. Checked for every
@@ -201,7 +202,8 @@ def bound_bytes_name(m: dict, arm: str) -> str:
     the bytes one decode step reads, when the record carries it; else
     `<arm>_weights_gb`, the arm's resident footprint (which also counts a
     vision tower and the embedding rows a step does not read, so the bound
-    is stricter). Apple silicon records carry no decode-read figure yet."""
+    is stricter). Apple silicon records from before arms_mlx.decode_read_bytes
+    carry no decode-read figure."""
     read = f"{arm}_decode_read_gb"
     return read if read in m else f"{arm}_weights_gb"
 

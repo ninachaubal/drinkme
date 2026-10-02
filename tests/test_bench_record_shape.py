@@ -513,6 +513,9 @@ def _fake_raw_mlx():
         "compressed_ttft_s": 0.07, "compressed_ttft_samples": [0.068, 0.07, 0.072],
         "swapped_linears": 7, "verified_tensors": 7,
         "ratio_min_of_n": round(14.9 / 9.9, 3), "drift_band_pct": 6.9,
+        # arms_mlx.decode_read_bytes per arm, the twin's included (it stays in raw)
+        "stock_bytes_per_token": _per_token(0, 900_000_000), "twin_bytes_per_token": _per_token(900_000_000, 0),
+        "compressed_bytes_per_token": _per_token(400_000_000, 0),
     }
 
 
@@ -544,6 +547,20 @@ def test_mlx_records_carry_no_twin_metric(monkeypatch):
     r = _build_record_mlx(monkeypatch)
     names = {m["name"] for m in r["metrics"]}
     assert not any(n.startswith("twin_") for n in names), names
+
+
+def test_an_mlx_record_carries_the_stock_and_compressed_decode_read(monkeypatch):
+    """the mlx arms record what one decode step reads (arms_mlx.
+    decode_read_bytes), so a metal record carries the canonical metrics and
+    stock's and compressed's <arm>_decode_read_gb, the denominators of their
+    bandwidth bounds; the twin's read stays in raw with its decode."""
+    r = _build_record_mlx(monkeypatch)
+    names = [m["name"] for m in r["metrics"]]
+    assert sorted(names) == sorted(CANONICAL_METRIC_NAMES + ("stock_decode_read_gb", "compressed_decode_read_gb"))
+    by_name = {m["name"]: m for m in r["metrics"]}
+    assert by_name["compressed_decode_read_gb"] == {"name": "compressed_decode_read_gb", "value": "0.4", "unit": "GB"}
+    assert r["raw"]["twin_bytes_per_token"]["total_bytes"] == 900_002_048
+    assert [arm for arm, _ in bench.bound_fractions(r["metrics"])] == ["stock", "compressed"]
 
 
 def test_new_shape_mlx_record_passes_check_points(tmp_path, monkeypatch):
@@ -584,8 +601,9 @@ CANONICAL_METRIC_NAMES = (
 # carrying them validates against the shipped lexicon; the description's
 # canonical list is the ten above, and it names these two as the twin's.
 TWIN_METRIC_NAMES = ("twin_decode_tok_s", "twin_weights_gb")
-# On torch each arm's decode-read bytes (arms.decode_read_bytes), the
-# denominator of its bandwidth bound; the description names them too.
+# Each arm's decode-read bytes (arms.decode_read_bytes; on mlx arms_mlx's,
+# and no twin metric), the denominator of its bandwidth bound; the
+# description names them too.
 DECODE_READ_METRIC_NAMES = ("stock_decode_read_gb", "twin_decode_read_gb", "compressed_decode_read_gb")
 
 

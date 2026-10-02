@@ -534,7 +534,8 @@ A vision model's tower and the embedding rows a step does not look up are
 resident, so they count toward memory (`<arm>_weights_gb`), but a text
 decode step never reads them, so they do not count toward the wall. Each arm
 records its own denominator as `<arm>_decode_read_gb`
-(`arms.decode_read_bytes`), and bench prints each arm's decode rate as a
+(`arms.decode_read_bytes`; on MLX `arms_mlx.decode_read_bytes`, for the
+stock and compressed arms), and bench prints each arm's decode rate as a
 fraction of `read_gb_s / <arm>_decode_read_gb`. Kernel efficiency and other
 work keep achieved throughput below the wall. Speculative decoding can
 exceed it by producing several tokens per weight read. See

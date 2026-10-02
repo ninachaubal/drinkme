@@ -897,6 +897,10 @@ def test_bench_arms_dry_run_on_the_toy(toy):
     assert len(r["stock_prefill_samples"]) == 2 and len(r["stock_ttft_samples"]) == 2
     assert r["bandwidth"]["read_bytes_s"] > 0 and r["bandwidth"]["probe_bytes"] > 0
     assert r["compression_profile"] == "sip"  # off the loaded pack's meta
+    # what one decode step reads, per arm (bench's <arm>_decode_read_gb): the
+    # twin's bf16 planes are stock's bytes, the codec reads fewer
+    per = {arm: r[f"{arm}_bytes_per_token"]["total_bytes"] for arm in ("stock", "twin", "compressed")}
+    assert per["twin"] == per["stock"] > per["compressed"] > 0, per
 
 
 def test_bench_arms_return_mlxs_cache_between_arms(toy, monkeypatch):
@@ -931,6 +935,78 @@ def test_bench_arms_return_mlxs_cache_between_arms(toy, monkeypatch):
     for i, e in enumerate(events):
         if e == "clear":
             assert events[i - 1] == "sync"
+
+
+# ------------------------- what a decode step reads (arms_mlx.decode_read_bytes) --
+
+
+def _unread_bytes(model) -> int:
+    """What an untied engine holds and a decode step does not read: the
+    norms, and every embedding row but the one looked up."""
+    norms = sum(m.weight.nbytes for _, m in model.named_modules() if isinstance(m, nn.RMSNorm))
+    emb = model.model.embed_tokens.weight
+    return norms + emb.nbytes - emb.shape[1] * emb.itemsize
+
+
+def test_each_arms_decode_read_is_what_it_holds_less_what_a_step_never_reads(toy, mlx_comp):
+    """The bench's three engines over the toy: a packed module reads all it
+    holds (the radix streams and tables, the twin's plane), so each arm's
+    read is its resident bytes less the norms and the unused embedding
+    rows. The twin's planes are the stock weights' bytes."""
+    from drinkme.arms_mlx import decode_read_bytes
+    from drinkme.serving.engine_mlx import TWIN
+
+    engines = {"stock": load_stock_mlx(toy[0], None),
+               "twin": load_compressed_mlx(toy[0], None, toy[1], path=TWIN),
+               "compressed": mlx_comp}
+    reads = {arm: decode_read_bytes(eng.model) for arm, eng in engines.items()}
+    for arm, eng in engines.items():
+        assert reads[arm]["total_bytes"] == eng.resident_bytes - _unread_bytes(eng.model), arm
+        assert reads[arm]["embedding_row_bytes"] == 2 * 1024, arm
+    assert reads["stock"]["counts"] == {"bf16": 15}  # 7 projections x 2 layers + lm_head
+    assert reads["twin"]["counts"] == {"drinkme_twin": 10, "bf16": 5}  # k/v unpacked, lm_head
+    assert reads["compressed"]["counts"] == {"drinkme_codec": 10, "bf16": 5}
+    assert reads["twin"]["total_bytes"] == reads["stock"]["total_bytes"]
+    assert reads["compressed"]["packed_bytes"] < reads["twin"]["packed_bytes"]
+    assert reads["compressed"]["raw_linear_bytes"] == reads["twin"]["raw_linear_bytes"]
+
+
+@pytest.mark.parametrize("tie", [True, False])
+def test_a_tied_head_reads_the_whole_table_as_an_untied_head_does(tie):
+    """mlx-lm builds no lm_head for a tied config and _head runs the table
+    through as_linear: one bf16 Linear over the whole table, the same bytes
+    and count as an untied lm_head, beside the lookup's one row."""
+    from drinkme.arms_mlx import decode_read_bytes
+
+    model = _tiny_qwen3(tie)
+    assert ("lm_head" in model) is not tie
+    H, I, V, L = 64, 128, 97, 2  # _tiny_qwen3: q and o 64 x 64, k and v 32 x 64
+    linears = L * (2 * 64 * H + 2 * 32 * H + 3 * I * H)
+    assert decode_read_bytes(model) == {
+        "packed_bytes": 0, "raw_linear_bytes": 2 * (linears + V * H), "embedding_row_bytes": 2 * H,
+        "counts": {"bf16": 7 * L + 1}, "total_bytes": 2 * (linears + V * H + H)}
+
+
+def test_a_raw_fallback_reads_its_plane_and_a_bias_is_not_counted():
+    """A raw fallback (RawLinear) reads its bf16 plane under
+    raw_linear_bytes, as arms.decode_read_bytes counts swap.RawLinear; a
+    BiasedLinear is a plain Linear whose weight is read and whose bias is
+    not counted, as on torch."""
+    from drinkme.arms_mlx import decode_read_bytes
+
+    model = _tiny_qwen3(False)
+    before = decode_read_bytes(model)
+    layer = model.model.layers[0]
+    w = layer.mlp.down_proj.weight
+    layer.mlp.down_proj = make_module_mlx(
+        {"raw_bits": np.array(w.view(mx.uint16)), "R": w.shape[0], "C": w.shape[1], "bpw": 16.0,
+         "codec": "raw"}, path="reference", name="model.layers.0.mlp.down_proj")
+    k = layer.self_attn.k_proj.weight
+    layer.self_attn.k_proj = BiasedLinear(k, mx.ones((k.shape[0],), dtype=mx.bfloat16))
+    got = decode_read_bytes(model)
+    assert got["counts"] == {"drinkme_raw": 1, "bf16": 7 * 2}
+    assert got["raw_linear_bytes"] == before["raw_linear_bytes"]
+    assert got["total_bytes"] == before["total_bytes"]
 
 
 def test_the_twin_engine_is_the_reference_engine_bit_for_bit(toy, mlx_comp):

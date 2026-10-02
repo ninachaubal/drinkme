@@ -27,6 +27,12 @@ with its raw fallbacks (serving/engine_mlx dispatches per tensor).
   compressed  the MLX engine over the pack on the FUSED path: metal/gemv_radix,
               W never built. The plotted number.
 
+Each arm also records the bytes one decode step reads from its weights
+(decode_read_bytes: arms.decode_read_bytes' accounting over the MLX tree) as
+`<arm>_bytes_per_token`, the denominator of its bandwidth bound; bench
+publishes stock's and compressed's as `<arm>_decode_read_gb`, and the twin's
+stays in raw with the rest of the twin's numbers.
+
 MIN-OF-N WITH A DRIFT BAND (docs/metal.md): a fanless Apple machine throttles
 under sustained load — the M1 Air drifted +43% across six identical runs —
 so beside the median each arm reports its minimum and its spread, and the
@@ -318,6 +324,79 @@ def refuse_unless_verified(model_id: str, swapped: int) -> None:
         "record with no compressed tensor in it.")
 
 
+# arms.linear_kind's names for the MLX engine's packed modules, by each
+# module's own tensor_codec (engine_mlx: RadixLinear "radix", RadixTwinLinear
+# TWIN, RawLinear "raw")
+_READ_KIND = {"radix": "drinkme_codec", "twin": "drinkme_twin", "raw": "drinkme_raw"}
+_PACKED_READ_KINDS = ("drinkme_codec", "drinkme_twin")
+
+
+def decode_read_bytes(model) -> dict:
+    """Bytes ONE decode step reads from the weights of an MLX engine's
+    resident tree: arms.decode_read_bytes' accounting and dict, restated
+    because arms.py imports torch. bench._decode_read_metric turns
+    total_bytes into `<arm>_decode_read_gb`.
+
+    A packed module reads what it holds: a RadixLinear's
+    gemv_radix.resident arrays, every one of them bound by the decode step's
+    GEMV (gemv_radix.resident_bytes), and a RadixTwinLinear's or RawLinear's
+    bf16 plane, 2 bytes a weight. A plain Linear (stock's, an unpacked
+    projection, a BiasedLinear) reads its weight. Biases are not counted, as
+    on torch. Each token embedding table counts one row. mlx-lm's Qwen3
+    builds no lm_head when the config ties it, and engine_mlx._head runs
+    the table through as_linear, so a tied head is counted here as one more
+    bf16 Linear over the whole table, the module torch's tied lm_head is.
+    Norms, the unused embedding rows and the KV cache are not counted. The
+    lane serves dense Qwen3 text models only (runtimes.
+    MLX_SUPPORTED_MODEL_TYPES), so there is no vision tower to skip and no
+    `skipped` key.
+
+    Where the radix bytes differ from torch's: the MLX GEMV takes no
+    per-block schedule (torch's rx_schedule, gulp only), reads R, C, B and
+    NB from a 32-byte params buffer where the torch kernels take scalars,
+    and binds a directory or palette under gemv_radix.MIN_BOUND words
+    zero-padded to it (gemv_radix._bound). A sip tensor's palette is two
+    words, so each sip tensor reads 56 bytes more here than on torch: the
+    params and six words of palette pad. The bf16 planes, the embedding
+    row and the tied head are the same bytes on both runtimes."""
+    return decode_read_tally(_decode_reads(model))
+
+
+def decode_read_tally(reads) -> dict:
+    """arms.decode_read_bytes' dict off (kind, bytes) pairs, one per module a
+    decode step reads: kind is arms.linear_kind's name for a Linear (its
+    bytes the whole weight) or "embedding_row" (its bytes one row of the
+    table). Codec and twin weights are packed_bytes, the raw fallback and
+    plain bf16 raw_linear_bytes, and `counts` counts the Linears by kind.
+    No mlx: the arithmetic decode_read_bytes reports, on plain numbers."""
+    out = {"packed_bytes": 0, "raw_linear_bytes": 0, "embedding_row_bytes": 0, "counts": {}}
+    for kind, nbytes in reads:
+        if kind == "embedding_row":
+            out["embedding_row_bytes"] += int(nbytes)
+            continue
+        out["counts"][kind] = out["counts"].get(kind, 0) + 1
+        out["packed_bytes" if kind in _PACKED_READ_KINDS else "raw_linear_bytes"] += int(nbytes)
+    out["total_bytes"] = out["packed_bytes"] + out["raw_linear_bytes"] + out["embedding_row_bytes"]
+    return out
+
+
+def _decode_reads(model):
+    """(kind, bytes) for each module of `model` a decode step reads
+    (decode_read_bytes' rules), the tied head last."""
+    import mlx.nn as nn
+
+    for _name, mod in model.named_modules():
+        codec = getattr(mod, "tensor_codec", None)
+        if codec in _READ_KIND:
+            yield _READ_KIND[codec], mod.resident_bytes()
+        elif isinstance(mod, nn.Embedding):
+            yield "embedding_row", int(mod.weight.shape[-1]) * mod.weight.itemsize
+        elif isinstance(mod, nn.Linear):
+            yield "bf16", mod.weight.nbytes
+    if model.args.tie_word_embeddings:
+        yield "bf16", model.model.embed_tokens.weight.nbytes
+
+
 def run_arms(model_id: str, revision: str | None, prompt: str,
              pack_dir: str | None = None, fused: bool | None = None,
              n_new: int = N_NEW, reps: int = DECODE_REPS,
@@ -367,6 +446,9 @@ def run_arms(model_id: str, revision: str | None, prompt: str,
     # the engine holds, packed or raw — MLXEngine.resident_bytes), not an
     # allocator's view; bytes here, decimal GB at the record boundary.
     report["vram_bf16_bytes"] = int(eng.resident_bytes)
+    if hasattr(eng.model, "named_modules"):  # the tests' stubs are not mlx Modules
+        # the stock arm's bandwidth bound: read_gb_s / stock_decode_read_gb
+        report["stock_bytes_per_token"] = decode_read_bytes(eng.model)
     report["stock_outcome"] = "measured"  # this lane always runs stock (no fit check, no twin skip)
     report["bandwidth"]["total_param_bytes_bf16"] = int(eng.resident_bytes)
     report["bandwidth"]["ceiling_tok_s_bf16"] = round(
@@ -397,6 +479,9 @@ def run_arms(model_id: str, revision: str | None, prompt: str,
     # twin (arms.py), restated: this path is bench's own correctness
     # exercise, not a prefill kernel.
     eng = load_compressed_mlx(model_id, revision, pack_dir, path=TWIN, snap=snap)
+    if hasattr(eng.model, "named_modules"):
+        # raw only: bench publishes no twin metric on this lane (bench.py's twin_ran)
+        report["twin_bytes_per_token"] = decode_read_bytes(eng.model)
     load0 = load1()
     _, s_twin = timed_decode(eng, ids, n_new, reps)
     record_host_load(report, "twin", load0)
@@ -416,6 +501,9 @@ def run_arms(model_id: str, revision: str | None, prompt: str,
     eng = load_compressed_mlx(model_id, revision, pack_dir,
                               path="fused" if fused else "reference", snap=snap)
     report["vram_compressed_bytes"] = int(eng.resident_bytes)
+    if hasattr(eng.model, "named_modules"):
+        # the compressed arm's bandwidth bound: read_gb_s / compressed_decode_read_gb
+        report["compressed_bytes_per_token"] = decode_read_bytes(eng.model)
     # compression.profile off the artifact this arm actually loaded — the
     # pack writer's own `profile` in meta.json, which is what the manifest
     # digest binds; never a literal in bench.py.

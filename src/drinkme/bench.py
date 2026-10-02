@@ -658,9 +658,8 @@ def _run_point(hw: Hardware, m, runtime: str, base_result: dict,
         warning = host_load_warning(host)
         if warning:
             print(f"  warning: {warning}")
-    if runtime != "mlx":
-        print("  of each arm's bandwidth bound (read / decode-read bytes): " + " · ".join(
-            f"{arm} {frac:.0%}" for arm, frac in bound_fractions(result["metrics"])))
+    print("  of each arm's bandwidth bound (read / decode-read bytes): " + " · ".join(
+        f"{arm} {frac:.0%}" for arm, frac in bound_fractions(result["metrics"])))
     if runtime == "mlx":
         # the Apple discipline (arms_mlx.py): minima beside medians, and the
         # drift band printed where the ratio is, so a throttled run cannot
@@ -723,8 +722,8 @@ def bound_fractions(metrics: list) -> list:
 
 def _decode_read_metric(raw: dict, arm: str) -> list:
     """[`<arm>_decode_read_gb`] off raw.<arm>_bytes_per_token (arms.
-    decode_read_bytes' total), or [] when the arm did not measure it (a
-    runtime or a stub that walks no module tree)."""
+    decode_read_bytes' total; arms_mlx.decode_read_bytes' on mlx), or []
+    when the arm did not measure it (a stub that walks no module tree)."""
     per = raw.get(f"{arm}_bytes_per_token") or {}
     if per.get("total_bytes") is None:
         return []
