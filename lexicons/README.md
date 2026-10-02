@@ -115,6 +115,10 @@ views. Compare matching model revisions within one drinkme major version;
 distinguish predicted non-fits from attempted load failures. Records are self-reported.
 The results site shows the records published in this collection.
 
-This directory is the schema source; the schema is not published as a
-`com.atproto.lexicon.schema` record. A published
+This directory is the schema source. The schema is also published as a
+`com.atproto.lexicon.schema` record, resolvable the standard way: the
+`_lexicon.drinkme.petrichor.wtf` TXT record names
+`did:plc:t3wzk4ypgx2ooi4zwjjioaet`, whose repository holds it at
+`at://did:plc:t3wzk4ypgx2ooi4zwjjioaet/com.atproto.lexicon.schema/wtf.petrichor.drinkme.measurement`.
+A schema change here is published there in the same release. A published
 permission set could also provide application-specific consent wording.
