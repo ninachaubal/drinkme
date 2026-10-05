@@ -14,7 +14,7 @@ sign/mantissa, independently decodable 1024-weight blocks), in this repo's
 pack container (codec/pack.py, docs/pack-format.md).
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 # The one lexicon. The suite IS the bench code at __version__: numbers
 # compare within a semver major, and an existing metric name never changes

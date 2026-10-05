@@ -7,6 +7,8 @@ release of one major version.
 
 ## Unreleased
 
+## 1.0.1 — 2026-10-04
+
 ### Added
 
 - Apple silicon: `drinkme bench` on the MLX lane records `stock_decode_read_gb`
