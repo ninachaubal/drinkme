@@ -39,6 +39,7 @@ llama.cpp's rules, and drinkme's version of each:
 | one at the start of the last user message (#24176, found by per-template delimiters) | the same, found by rendering the history before that message: its ids must be a prefix of the prompt's, or none is taken |
 | one at each earlier user-message start more than `checkpoint_min_step` apart | not taken (see below) |
 | none right after an image chunk, and none inside one (an image chunk is atomic) | none inside an image run that a prefill span may not cut (image_prompt.ImagePrompt.whole): the position moves back to the run's start; right after a run is allowed |
+| — | one at the end of each image and video, past its closing marker (MEDIA ENDS below): the last DRINKME_MEDIA_CHECKPOINTS (default 2) of a prompt, kept apart from the min-step thinning and at most that many per slot |
 | create: erase other requests' checkpoints within `checkpoint_min_step` (8192) of the previous kept one (#25472), then the oldest while N are held | the same, by request |
 | restore: needed only when the memory cannot reach the common prefix; the newest checkpoint at or below it, leaving at least one prompt token to compute | the same; a sliding cache whose rings have not wrapped, and a cache with only full attention, rewinds by length instead |
 | erase checkpoints past the restore point | the same |
@@ -58,10 +59,41 @@ The last user message's start is where a conversation that shares only a
 system prompt, or a regenerated last message, parts from the slot; the
 checkpoints near the end serve every re-render the reports measured.
 
+MEDIA ENDS. A prompt that carries an image or a video takes one more
+checkpoint per media item: at its end, the position past its last run and
+the closing marker after it (Qwen3.5's `<|vision_end|>`, gemma-4's
+`<image|>`; image_prompt.ImagePrompt.media_ends). A new question about the
+same media parts from the slot right there, and the rules above put no
+checkpoint near it: the two near the end follow the prompt's end, and the
+earlier of them, inside a frame group's run, moves back to the run's start.
+On Qwen3.8-27B a follow-up about a 2,782-token clip restored to 2,062,
+mid-video, and ran the tower again. With a checkpoint at the video's end
+the follow-up reuses everything through it, and an image or video whose
+runs all lie in the reused prefix never runs the tower
+(image_prompt.ImagePrompt.begin). A request takes the last MEDIA of its
+media ends past the reuse point (`media_positions`). A media checkpoint is
+flagged (`Checkpoint.media`) and kept apart from the thinning: it is never
+erased for lying within MIN_STEP of another, and it does not count as the
+previous kept one, so the other checkpoints are kept and erased exactly as
+without it. Instead a slot keeps at most MEDIA of them, and adding one past
+that erases the lowest. The lowest goes because the media ends a later
+prompt can reach are the ones its common prefix covers, and every request
+first drops what lies past its reuse point, so the newer ends are the
+higher ones. MEDIA is DRINKME_MEDIA_CHECKPOINTS, default 2: the last media
+item of a prompt (the follow-up question) and the one before it (an earlier
+image or video in the conversation, or the first of two images when the
+second is replaced). Each is one full checkpoint, 147.8 MiB on the 27B (its
+48 DeltaNet layers' states), so the default adds 296 MiB per slot at most.
+0 takes none. The tower output cache (serving/tower_cache.py) covers what a
+dropped media checkpoint would have saved in tower time, though not the
+prefill.
+
 THE BOUND. Other requests' checkpoints are more than MIN_STEP apart and lie
-in [1, ctx - 1]; the current request adds at most four. So a slot holds at
-most min(N, floor((ctx - 2) / (MIN_STEP + 1)) + 5) (`max_held`), five at the
-default ctx of 8192. The fit charge is that count times `config_bytes`.
+in [1, ctx - 1]; the current request adds at most four, and media
+checkpoints, which the thinning skips, are at most MEDIA. So a slot holds
+at most min(N, floor((ctx - 2) / (MIN_STEP + 1)) + 5 + MEDIA) (`max_held`),
+five at the default ctx of 8192 for a text model and seven for one that
+reads images. The fit charge is that count times `config_bytes`.
 
 WHEN THE PREFILL IS SPLIT. A split costs one more forward over the whole
 model, for a few tokens: on gemma-4-31B on gfx1151 about 0.6 s each, which
@@ -108,6 +140,10 @@ UBATCH = 512
 # better match (f_keep < 0.5 -> update_cache)
 SIMILARITY = 0.1
 KEEP = 0.5
+# checkpoints at the end of an image or a video (module docstring, MEDIA
+# ENDS): how many one slot keeps and one request takes
+MEDIA_ENV = "DRINKME_MEDIA_CHECKPOINTS"
+MEDIA_DEFAULT = 2
 
 FULL, SLIDING, LINEAR = "full", "sliding", "linear"
 
@@ -137,12 +173,33 @@ def max_from_env(explicit: int | None = None) -> int:
     return n
 
 
-def max_held(n_max: int, ctx: int, min_step: int = MIN_STEP) -> int:
+def media_from_env(warn: bool = True) -> int:
+    """DRINKME_MEDIA_CHECKPOINTS: how many media-end checkpoints a slot keeps
+    (module docstring, MEDIA ENDS), MEDIA_DEFAULT unset; 0 takes none.
+    Garbage or a negative count falls back to the default, with a warning
+    unless `warn` is False (the no-model picker's estimate is silent, as
+    packs.checkpoints_estimate is)."""
+    raw = os.environ.get(MEDIA_ENV, "").strip()
+    if not raw:
+        return MEDIA_DEFAULT
+    try:
+        n = int(raw)
+    except ValueError:
+        n = -1
+    if n < 0:
+        if warn:
+            print(f"[drinkme] {MEDIA_ENV}={raw!r} is not a count of 0 or more — using "
+                  f"{MEDIA_DEFAULT}", file=sys.stderr, flush=True)
+        return MEDIA_DEFAULT
+    return n
+
+
+def max_held(n_max: int, ctx: int, min_step: int = MIN_STEP, media: int = 0) -> int:
     """The most checkpoints one slot can hold under these rules (module
-    docstring, THE BOUND)."""
+    docstring, THE BOUND), with at most `media` of them at media ends."""
     if n_max <= 0:
         return 0
-    return min(n_max, max(0, (ctx - 2) // (min_step + 1)) + 5)
+    return min(n_max, max(0, (ctx - 2) // (min_step + 1)) + 5 + max(0, media))
 
 
 # ------------------------------------------------------- the cache layers --
@@ -255,26 +312,31 @@ class Checkpoint:
     """The non-rewindable state of one cache at position `n`, taken during
     request `task`. `layers` maps a layer index to what that layer needs
     back: a sliding layer's (keys, values, cumulative_length, int), a linear
-    layer's {state index: (conv, recurrent, has_previous_state)}."""
+    layer's {state index: (conv, recurrent, has_previous_state)}. `media`
+    is True for one taken at the end of an image or a video, which
+    Checkpoints.add keeps by its own rule (module docstring, MEDIA ENDS)."""
 
-    __slots__ = ("n", "task", "layers", "nbytes")
+    __slots__ = ("n", "task", "layers", "nbytes", "media")
 
-    def __init__(self, n: int, task: int, layers: dict, nbytes: int):
+    def __init__(self, n: int, task: int, layers: dict, nbytes: int, media: bool = False):
         self.n, self.task, self.layers, self.nbytes = n, task, layers, nbytes
+        self.media = media
 
     def __repr__(self) -> str:
-        return f"Checkpoint(n={self.n}, task={self.task}, {self.nbytes} B)"
+        return (f"Checkpoint(n={self.n}, task={self.task}, {self.nbytes} B"
+                + (", media)" if self.media else ")"))
 
 
 def _nbytes(t) -> int:
     return t.numel() * t.element_size()
 
 
-def snapshot(cache, task: int, at: int | None = None) -> Checkpoint:
+def snapshot(cache, task: int, at: int | None = None, media: bool = False) -> Checkpoint:
     """The checkpoint of `cache` where it stands, or at an earlier position
     `at` its rings still hold (`ring_holds`): its non-rewindable state,
     copied on the device (no host read). At `at`, a ring is its first `at`
-    rows and both counters at `at`, the shapes a snapshot taken there has."""
+    rows and both counters at `at`, the shapes a snapshot taken there has.
+    `media` flags one taken at a media end (Checkpoint.media)."""
     n = length(cache)
     if n < 0:
         raise ValueError("cache layers disagree about their length")
@@ -312,7 +374,7 @@ def snapshot(cache, task: int, at: int | None = None) -> Checkpoint:
                 layers[i] = states
         elif kind is None:
             raise ValueError(f"cache layer {i} ({type(layer).__name__}) cannot be checkpointed")
-    return Checkpoint(n if at is None else at, task, layers, total)
+    return Checkpoint(n if at is None else at, task, layers, total, media)
 
 
 def restore(cache, ck: Checkpoint) -> None:
@@ -369,7 +431,7 @@ def flatten(ck: Checkpoint, prefix: str) -> tuple[dict, dict]:
                 states[str(s)] = {"prev": bool(prev), "conv": conv is not None,
                                   "rec": rec is not None}
             layers[str(i)] = {"kind": LINEAR, "states": states}
-    return tensors, {"n": ck.n, "prefix": prefix, "layers": layers}
+    return tensors, {"n": ck.n, "prefix": prefix, "layers": layers, "media": ck.media}
 
 
 def unflatten(tensors: dict, meta: dict, device) -> Checkpoint:
@@ -399,7 +461,8 @@ def unflatten(tensors: dict, meta: dict, device) -> Checkpoint:
             layers[int(i)] = states
         else:
             raise ValueError(f"checkpoint layer {i}: unknown kind {lay['kind']!r}")
-    return Checkpoint(int(meta["n"]), -1, layers, total)
+    # a file written before media checkpoints has no "media" key
+    return Checkpoint(int(meta["n"]), -1, layers, total, bool(meta.get("media", False)))
 
 
 def mismatch(cache, ck: Checkpoint) -> str | None:
@@ -444,12 +507,14 @@ class Checkpoints:
     llama.cpp keeps them by (module docstring). `on` is False when the knob is
     0 or the slot's cache cannot be checkpointed; `free` is True when the
     slot's cache reaches any earlier position by length (rewinds_freely),
-    decided when the slot was last written."""
+    decided when the slot was last written. `media_max` is how many
+    media-end checkpoints it keeps (MEDIA ENDS)."""
 
-    __slots__ = ("n_max", "min_step", "items", "free", "on")
+    __slots__ = ("n_max", "min_step", "items", "free", "on", "media_max")
 
-    def __init__(self, n_max: int = 0, min_step: int = MIN_STEP):
+    def __init__(self, n_max: int = 0, min_step: int = MIN_STEP, media_max: int = 0):
         self.n_max, self.min_step = n_max, min_step
+        self.media_max = media_max
         self.items: list[Checkpoint] = []
         self.free = False
         self.on = n_max > 0
@@ -504,14 +569,26 @@ class Checkpoints:
     def add(self, ck: Checkpoint) -> list[Checkpoint]:
         """llama.cpp's create_checkpoint: erase other requests' checkpoints
         within min_step of the previous kept one, then the oldest until there
-        is room, then keep `ck`. Returns what was erased."""
+        is room, then keep `ck`. Returns what was erased. Media checkpoints
+        are skipped by the first rule; a media `ck` first erases the lowest
+        media checkpoints until fewer than media_max are left (module
+        docstring, MEDIA ENDS)."""
         gone, kept, last = [], [], -1
         for c in self.items:
+            if c.media:
+                kept.append(c)
+                continue
             if c.task != ck.task and last >= 0 and c.n <= last + self.min_step:
                 gone.append(c)
                 continue
             kept.append(c)
             last = c.n
+        if ck.media:
+            media = [c for c in kept if c.media]
+            while media and len(media) >= self.media_max:
+                c = media.pop(0)
+                kept.remove(c)
+                gone.append(c)
         while kept and len(kept) >= self.n_max:
             gone.append(kept.pop(0))
         kept.append(ck)
@@ -537,6 +614,16 @@ def positions(n_prompt: int, start: int, whole=(), user: int | None = None) -> l
         if p > start and p >= 1 and p not in out:
             out.append(p)
     return sorted(out)
+
+
+def media_positions(ends, start: int, n_prompt: int, media_max: int) -> list[int]:
+    """Where a prefill from `start` takes media-end checkpoints: the last
+    `media_max` of a prompt's media ends (image_prompt.ImagePrompt.media_ends)
+    after `start` and before the prompt's end, where positions() already
+    takes one (module docstring, MEDIA ENDS)."""
+    if media_max <= 0:
+        return []
+    return sorted({p for p in ends if start < p < n_prompt})[-media_max:]
 
 
 # ---------------------------------------------------------- the fit charge --

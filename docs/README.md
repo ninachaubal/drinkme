@@ -9,7 +9,7 @@ with `uv run --no-sync`. Development starts at [AGENTS.md](../AGENTS.md).
 - [CLI reference](cli.md): commands, flags, and environment variables.
 - [Hardware](hardware.md): platform status, and the first-run probe and self-test.
 - [Models](models.md): tested models, what each vision model makes of an image, automatic selection, and `drinkme check`.
-- [Serving](serve.md): API capabilities, image input, chunked prefill, metrics, context limits, token budgets, and YaRN.
+- [Serving](serve.md): API capabilities, image and video input, chunked prefill, metrics, context limits, token budgets, and YaRN.
 - [Responses API](serve-responses.md): request mapping, supported fields, streaming, and clients.
 - [Clients](clients.md): connecting a client (base URLs, keys, model ids), a first request, Codex, turning thinking off, and a pi recipe.
 - [Tool formats](serve-tool-formats.md): dialect detection, parsers, and adding support.

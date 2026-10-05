@@ -191,6 +191,35 @@ def test_image_max_pixels_is_written_for_the_engine_and_the_dialects(monkeypatch
     assert vision.max_pixels_from_env() == 2_073_600
 
 
+def test_cli_tower_cache_gib_reaches_serve_run_and_serve_writes_the_env(monkeypatch, capsys):
+    """`drinkme serve --tower-cache-gib` through argparse (a negative or
+    garbage size is argparse's usage error), and serve.run writes the
+    environment serving/tower_cache.cap_from_env reads; no flag leaves it
+    alone."""
+    from drinkme import cli
+    from drinkme.serving import tower_cache
+
+    seen = {}
+    monkeypatch.setattr(serve, "run", lambda *a, **kw: seen.update(kw) or 0)
+    monkeypatch.setattr("drinkme.bootstrap.ensure_accelerator", lambda: BootstrapOutcome("ok"))
+    assert cli.main(["serve", "--model", "Qwen3-8B", "--tower-cache-gib", "0"]) == 0
+    assert seen["tower_cache_gib"] == 0.0
+    cli.main(["serve", "--model", "Qwen3-8B"])
+    assert seen["tower_cache_gib"] is None
+    for bad in ("-1", "lots"):
+        with pytest.raises(SystemExit):
+            cli.main(["serve", "--model", "Qwen3-8B", "--tower-cache-gib", bad])
+        assert "not a size in GiB" in capsys.readouterr().err
+    monkeypatch.undo()
+    monkeypatch.setenv("DRINKME_FAKE_ENGINE", "1")
+    monkeypatch.setenv(tower_cache.ENV, "2")
+    monkeypatch.setattr(serve, "_serve", lambda *a, **kw: 0)
+    serve.run("Qwen/Qwen3-8B", None, port=0)
+    assert tower_cache.cap_from_env() == 2 * 1024 ** 3
+    serve.run("Qwen/Qwen3-8B", None, port=0, tower_cache_gib=0.25)
+    assert tower_cache.cap_from_env() == 1024 ** 3 // 4
+
+
 def test_cli_no_image_urls_and_media_path_flags_reach_serve_run(monkeypatch, capsys, tmp_path):
     """`drinkme serve --no-image-urls --media-path DIR`, through
     argparse; --media-path validates the directory AT PARSE TIME (a human

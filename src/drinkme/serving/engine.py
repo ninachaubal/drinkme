@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterator, Protocol
 
 if TYPE_CHECKING:
+    from .video import PreparedVideo
     from .vision import PreparedImage
 
 
@@ -193,8 +194,10 @@ class GenerationRequest:
                 `[{"type": "text", "text": ...}, {"type": "image"}, ...]`.
                 Each `{"type": "image"}` is one image, rendered by the chat
                 template as the architecture's placeholder (Qwen3.5:
-                `<|vision_start|><|image_pad|><|vision_end|>`). A system
-                turn never carries one.
+                `<|vision_start|><|image_pad|><|vision_end|>`), and each
+                `{"type": "video"}` one video (Qwen3.5:
+                `<|vision_start|><|video_pad|><|vision_end|>`). A system
+                turn never carries either.
     `sampling`  the validated SampleParams, the constraint included.
     `tools`     validated OpenAI tool definitions actually being OFFERED,
                 or None (tool_choice "none" already zeroed it).
@@ -215,7 +218,12 @@ class GenerationRequest:
                 in template order: images[k] is the k-th `{"type": "image"}`
                 part across `messages`, first message first. Empty for a
                 text request, and then nothing about the generation differs
-                from a request built without the field."""
+                from a request built without the field.
+    `videos`    the request's videos, decoded, sampled and preprocessed by
+                the dialect outside the generation lock
+                (video.VideoInput.prepare), in template order: videos[k] is
+                the k-th `{"type": "video"}` part. Empty, the default, for
+                a request without video."""
 
     messages: list[dict]
     sampling: SampleParams
@@ -224,6 +232,7 @@ class GenerationRequest:
     stream: bool = False
     request_id: str = ""
     images: tuple[PreparedImage, ...] = ()
+    videos: tuple[PreparedVideo, ...] = ()
 
 
 @dataclass

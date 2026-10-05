@@ -136,12 +136,13 @@ def test_the_cli_flag_reaches_serve_run_and_serve_writes_the_env(monkeypatch):
 def test_serve_run_writes_the_env_before_the_engine_is_built(monkeypatch):
     from drinkme import serve
 
-    monkeypatch.delenv(cc.ENV, raising=False)
+    # setenv, so teardown puts back what was there before serve.run wrote
+    # it (a delenv after the write would restore the "5")
+    monkeypatch.setenv(cc.ENV, "")
     monkeypatch.setenv("DRINKME_FAKE_ENGINE", "1")
     monkeypatch.setattr(serve, "_serve", lambda *a, **kw: 0)
     serve.run("org/toy", None, ctx_checkpoints=5)
     assert os.environ[cc.ENV] == "5"
-    monkeypatch.delenv(cc.ENV)
 
 
 # ------------------------------------------------------------ positions --
@@ -238,18 +239,21 @@ def test_drop_beyond():
     assert c.positions() == [10, 20]
 
 
+@pytest.mark.parametrize("media", [0, cc.MEDIA_DEFAULT, 4])
 @pytest.mark.parametrize("n_max,ctx,min_step", [(32, 8192, cc.MIN_STEP), (32, 32768, cc.MIN_STEP),
                                                 (32, 262144, cc.MIN_STEP), (5, 4000, 100),
                                                 (2, 4000, 100), (1, 500, 10)])
-def test_no_request_sequence_holds_more_than_max_held(n_max, ctx, min_step):
+def test_no_request_sequence_holds_more_than_max_held(n_max, ctx, min_step, media):
     """THE BOUND the fit charge rests on, against random conversations: every
     request restores somewhere at or below what the slot holds, drops what
-    lies past it, and takes the checkpoints positions() names."""
-    rng = random.Random(n_max * 1000 + ctx)
-    bound = cc.max_held(n_max, ctx, min_step)
+    lies past it, and takes the checkpoints positions() names, and with
+    `media` the media-end ones media_positions() names among up to six
+    images and videos (MEDIA ENDS)."""
+    rng = random.Random(n_max * 1000 + ctx + media)
+    bound = cc.max_held(n_max, ctx, min_step, media=media)
     worst = 0
     for trial in range(40):
-        c = cc.Checkpoints(n_max, min_step)
+        c = cc.Checkpoints(n_max, min_step, media_max=media)
         held = 0
         for task in range(1, 60):
             n_prompt = rng.randint(held + 1, ctx - 1) if held < ctx - 2 and rng.random() < 0.8 \
@@ -258,10 +262,13 @@ def test_no_request_sequence_holds_more_than_max_held(n_max, ctx, min_step):
             reach = c.reach(start, held, n_prompt)
             c.drop_beyond(reach)
             user = rng.randint(1, n_prompt) if rng.random() < 0.7 else None
-            for p in cc.positions(n_prompt, reach, user=user):
-                c.add(ck(p, task))
+            ends = rng.sample(range(1, n_prompt), min(rng.randint(0, 6), n_prompt - 1))
+            at_media = set(cc.media_positions(ends, reach, n_prompt, media))
+            for p in sorted(set(cc.positions(n_prompt, reach, user=user)) | at_media):
+                c.add(cc.Checkpoint(p, task, {}, 0, media=p in at_media))
                 worst = max(worst, len(c))
                 assert len(c) <= bound
+                assert sum(x.media for x in c.items) <= media
             held = min(ctx - 1, n_prompt + rng.randint(0, 50))
     assert worst <= bound
 
@@ -271,6 +278,85 @@ def test_max_held_at_the_defaults():
     assert cc.max_held(32, 32768) == 8
     assert cc.max_held(32, 262144) == 32
     assert cc.max_held(0, 8192) == 0 and cc.max_held(2, 8192) == 2
+    # a model that reads images: the media ends on top, under N
+    assert cc.max_held(32, 8192, media=cc.MEDIA_DEFAULT) == 7
+    assert cc.max_held(32, 262144, media=cc.MEDIA_DEFAULT) == 32
+    assert cc.max_held(3, 8192, media=2) == 3 and cc.max_held(0, 8192, media=2) == 0
+
+
+# ---------------------------------------------------------- media ends --
+
+
+def mck(n, task=0):
+    return cc.Checkpoint(n, task, {}, 0, media=True)
+
+
+def test_media_positions_are_the_last_ends_past_start_and_before_the_end():
+    assert cc.media_positions([10, 30, 50], 0, 100, 2) == [30, 50]
+    assert cc.media_positions([50, 10, 30], 30, 100, 2) == [50]
+    assert cc.media_positions([10, 30, 100], 0, 100, 5) == [10, 30]  # n_prompt has its own
+    assert cc.media_positions([30, 30], 0, 100, 2) == [30]
+    assert cc.media_positions([10, 30, 50], 0, 100, 0) == []
+
+
+def test_media_checkpoints_are_kept_apart_from_the_thinning():
+    """llama.cpp #25472's rule would erase an earlier request's checkpoint at
+    a media end lying within min_step of a kept one below it (on the 27B, a
+    video's end at 2,750 above a checkpoint at 2,062). It is skipped, and
+    it does not count as the previous kept one, so the rest are thinned
+    exactly as without it."""
+    c = listing(32, [(10, 1), (50, 1), (9000, 1)], min_step=100)
+    c.items.insert(1, mck(40, 1))
+    gone = c.add(ck(9050, 2))
+    assert [g.n for g in gone] == [50]  # what the list without 40 loses
+    assert c.positions() == [10, 40, 9000, 9050]
+    assert [x.n for x in c.items if x.media] == [40]
+
+
+def test_a_media_checkpoint_past_media_max_erases_the_lowest_media_one():
+    c = cc.Checkpoints(32, 0, media_max=2)
+    c.items = [ck(10, 1), mck(20, 1), mck(30, 1), ck(40, 1)]
+    gone = c.add(mck(50, 2))
+    assert [g.n for g in gone] == [20]
+    assert c.positions() == [10, 30, 40, 50]
+    assert [x.n for x in c.items if x.media] == [30, 50]
+    # a checkpoint that is not at a media end erases none by that rule
+    c.add(ck(60, 2))
+    assert [x.n for x in c.items if x.media] == [30, 50]
+
+
+def test_n_counts_media_checkpoints_too():
+    c = cc.Checkpoints(3, 0, media_max=2)
+    c.items = [mck(10, 1), ck(20, 1), mck(30, 1)]
+    assert [g.n for g in c.add(ck(40, 2))] == [10]  # the oldest goes, media or not
+    assert c.positions() == [20, 30, 40]
+
+
+@pytest.mark.parametrize("raw,want", [("", cc.MEDIA_DEFAULT), ("0", 0), ("3", 3), (" 1 ", 1)])
+def test_the_media_knob(raw, want, monkeypatch):
+    monkeypatch.setenv(cc.MEDIA_ENV, raw)
+    assert cc.media_from_env() == want
+
+
+@pytest.mark.parametrize("raw", ["x", "-1"])
+def test_a_bad_media_knob_warns_unless_told_not_to(raw, monkeypatch, capsys):
+    monkeypatch.setenv(cc.MEDIA_ENV, raw)
+    assert cc.media_from_env(warn=False) == cc.MEDIA_DEFAULT
+    assert capsys.readouterr().err == ""
+    assert cc.media_from_env() == cc.MEDIA_DEFAULT
+    assert cc.MEDIA_ENV in capsys.readouterr().err
+
+
+def test_the_cold_tiers_form_keeps_the_media_flag():
+    k, v = torch.randn(1, 1, 3, 4), torch.randn(1, 1, 3, 4)
+    c = torch.tensor(3)
+    for media in (False, True):
+        tensors, meta = cc.flatten(cc.Checkpoint(3, 7, {0: (k, v, c, 3)}, 0, media=media), "ck0.")
+        back = cc.unflatten(tensors, json.loads(json.dumps(meta)), "cpu")
+        assert back.media is media and back.n == 3 and torch.equal(back.layers[0][0], k)
+    # a file written before media checkpoints has no flag: not one
+    meta.pop("media")
+    assert cc.unflatten(tensors, meta, "cpu").media is False
 
 
 # ----------------------------------------------------------- pick_slot --
@@ -819,16 +905,21 @@ def _runs(eng, msgs, images, toy):
     return [(s, e) for s, e, _img in ImagePrompt(ids, images, tower, model).runs]
 
 
+@pytest.mark.parametrize("media", [0, cc.MEDIA_DEFAULT])
 @pytest.mark.parametrize("window", [16, 512])
-def test_no_gemma_checkpoint_lands_inside_an_image(gemma_vision_toys, window):
+def test_no_gemma_checkpoint_lands_inside_an_image(gemma_vision_toys, window, media,
+                                                   monkeypatch):
     """A prompt that ends right after its image (gemma's tool loop:
     `...<image|>` and the model writes next): n_prompt - 4 falls inside the
-    bidirectional run and moves back to its start; n_prompt is after it. The
-    next turn, parting from the slot after the prompt's end, restores the
-    one at n_prompt: the image lies inside the reused prefix and the tower
-    does not run, and the answer is the cold one."""
+    bidirectional run and moves back to its start; n_prompt is after it, and
+    so is the image's end, past `<image|>` (MEDIA ENDS), when media
+    checkpoints are on. The next turn, parting from the slot after the
+    prompt's end, restores the one at n_prompt: the image lies inside the
+    reused prefix and the tower does not run, and the answer is the cold
+    one."""
     toy = gemma_vision_toys[window]
     _ref, model, tok, tower = toy
+    monkeypatch.setenv(cc.MEDIA_ENV, str(media))
     eng = gmv.engine(toy)
     msgs = [gmv.user("what is in this picture", None)]
     img = lambda: [gmv.image(40, 24, 21)]  # noqa: E731
@@ -838,7 +929,7 @@ def test_no_gemma_checkpoint_lands_inside_an_image(gemma_vision_toys, window):
     assert s < n - 4 < e
     held = eng._slots[0].ckpts.positions()
     if window == 16:
-        assert held == [s, n]
+        assert held == ([s, n] if media == 0 else [s, e + 1, n])
     assert not any(a < p < b for p in held for a, b in [(s, e)])
     gen = written(eng, first)
     hist = msgs + [{"role": "assistant", "content": trim(tok, gen)}, gmv.user("and the fox")]
@@ -848,16 +939,23 @@ def test_no_gemma_checkpoint_lands_inside_an_image(gemma_vision_toys, window):
     assert warm.text == gmv.ask(gmv.engine(toy), hist, img()).text
 
 
+@pytest.mark.parametrize("media,tower_cache", [(0, "0"), (0, "1"), (cc.MEDIA_DEFAULT, "0")])
 @pytest.mark.parametrize("window", [16, 512])
 def test_a_turn_that_parts_inside_the_images_markers_reuses_whole_runs_only(
-        gemma_vision_toys, window):
+        gemma_vision_toys, window, media, tower_cache, monkeypatch):
     """The next prompt parts from the slot right after the image's closing
-    marker. The 16-window cache has only its checkpoints (at the run's start
-    and the prompt's end), so it restores the one at the start and runs the
-    tower again; the 512-window cache never wrapped, rewinds to the part
-    point and skips the tower. Either way the answer is the cold one."""
+    marker. Without media checkpoints the 16-window cache has only its
+    checkpoints at the run's start and the prompt's end, so it restores the
+    one at the start and runs the tower again, unless the tower cache holds
+    the image (serving/tower_cache.py). With them it holds one at the
+    image's end, past the marker (MEDIA ENDS), and restores that: the image
+    is in the reused prefix and the tower does not run. The 512-window cache
+    never wrapped, rewinds to the part point and skips the tower. Either
+    way the answer is the cold one."""
     toy = gemma_vision_toys[window]
     _ref, model, tok, tower = toy
+    monkeypatch.setenv(cc.MEDIA_ENV, str(media))
+    monkeypatch.setenv("DRINKME_TOWER_CACHE_GIB", tower_cache)
     eng = gmv.engine(toy)
     msgs = [gmv.user("what is in this picture", None)]
     img = lambda: [gmv.image(40, 24, 21)]  # noqa: E731
@@ -866,8 +964,8 @@ def test_a_turn_that_parts_inside_the_images_markers_reuses_whole_runs_only(
     nxt = [gmv.user("what is in this picture", None), gmv.user("and the fox quick brown")]
     with gmv.TowerCalls(model) as calls:
         warm = gmv.ask(eng, nxt, img())
-    if window == 16:
-        assert warm.cached_tokens == s and calls.n == 1
+    if window == 16 and media == 0:
+        assert warm.cached_tokens == s and calls.n == (1 if tower_cache == "0" else 0)
     else:
         assert warm.cached_tokens == e + 1 and calls.n == 0
     assert warm.text == gmv.ask(gmv.engine(toy), nxt, img()).text
@@ -877,29 +975,39 @@ def qwen_images():
     return [qiv.image(48, 32, 7)]
 
 
+@pytest.mark.parametrize("media", [0, cc.MEDIA_DEFAULT])
 @pytest.mark.parametrize("chunk,spec", [(0, "off"), (7, "off"), (7, "auto")])
-def test_a_causal_run_follows_the_chunking_rule(chunk, spec, toy_qiv):
+def test_a_causal_run_follows_the_chunking_rule(chunk, spec, media, toy_qiv, monkeypatch):
     """Qwen3.5's image runs are causal. A run that fits the prefill chunk is
     one span (ImagePrompt.whole), so a checkpoint inside it moves to its
     start; a run longer than the chunk is cut like text, so one may land
-    inside it, and a restore there prefills the rest of the run from the
-    whole image's output. MTP (the toy's head) after that restore too. The
-    answer is the cold one."""
+    inside it, and without media checkpoints a restore there prefills the
+    rest of the run from the whole image's output. MTP (the toy's head)
+    after that restore too. With media checkpoints the next turn restores
+    the one at the image's end (MEDIA ENDS), whatever the chunk. The answer
+    is the cold one."""
     toy = toy_qiv
     _ref, model, tok, _head = toy
+    monkeypatch.setenv(cc.MEDIA_ENV, str(media))
     eng = qiv.engine(toy, chunk=chunk, head=spec == "auto")
     msgs = [qiv.user("what is in this picture", None)]
     first = qiv.ask(eng, msgs, qwen_images(), spec=spec, n=6)
     n = first.prompt_tokens
-    runs = [(s, e) for s, e, _i in ImagePrompt(eng.tokenize(messages=msgs), qwen_images(),
-                                                qiv.TOWER, model).runs]
-    (s, e), = runs
-    assert e - s > 7 and s < n - 4 < e
+    ip = ImagePrompt(eng.tokenize(messages=msgs), qwen_images(), qiv.TOWER, model)
+    (s, e), = [(s, e) for s, e, _i in ip.runs]
+    # this toy's config names no video ids, so its tower knows no
+    # <|vision_end|> id and the image ends with its run
+    end, = ip.media_ends()
+    assert e - s > 7 and s < n - 4 < e and end == e
     held = eng._slots[0].ckpts.positions()
     assert (n - 4 in held) == (chunk == 7) and (s in held) == (chunk == 0)
+    assert (end in held) == (media > 0)
     nxt = msgs + [qiv.user("and the fox")]
     warm = qiv.ask(eng, nxt, qwen_images(), spec=spec)
-    assert warm.cached_tokens == (n - 4 if chunk == 7 else s)
+    if media:
+        assert warm.cached_tokens == end
+    else:
+        assert warm.cached_tokens == (n - 4 if chunk == 7 else s)
     cold = qiv.ask(qiv.engine(toy, chunk=chunk, head=spec == "auto"), nxt, qwen_images(),
                    spec=spec)
     assert warm.text == cold.text
@@ -1085,6 +1193,22 @@ def test_the_picker_charges_the_checkpoints(monkeypatch):
     assert packs.checkpoints_estimate(None) == 3 and packs.checkpoints_estimate(7) == 7
     monkeypatch.setenv(cc.ENV, "junk")
     assert packs.checkpoints_estimate(None) == cc.DEFAULT_MAX
+
+
+def test_the_picker_charges_a_vision_checkpoints_media_ends(monkeypatch):
+    """A checkpoint with a vision tower may serve images, so the no-model
+    charge counts the media-end checkpoints too (MEDIA ENDS)."""
+    sliding = {"layer_types": ["sliding_attention", "full_attention"],
+               "num_attention_heads": 2, "num_key_value_heads": 1, "head_dim": 64,
+               "sliding_window": 1024, "num_hidden_layers": 2}
+    seeing = dict(sliding, vision_config={"depth": 2})
+    one = cc.config_bytes(sliding, 2, 8192)
+    assert packs.checkpoint_gib(sliding, 8192, 2, 32) == pytest.approx(one * 5 * 2 / packs.GIB)
+    assert packs.checkpoint_gib(seeing, 8192, 2, 32) == pytest.approx(one * 7 * 2 / packs.GIB)
+    monkeypatch.setenv(cc.MEDIA_ENV, "0")
+    assert packs.checkpoint_gib(seeing, 8192, 2, 32) == pytest.approx(one * 5 * 2 / packs.GIB)
+    monkeypatch.setenv(cc.MEDIA_ENV, "junk")
+    assert packs.checkpoint_gib(seeing, 8192, 2, 32) == pytest.approx(one * 7 * 2 / packs.GIB)
 
 
 def test_the_engine_announces_them_and_charges_them_in_its_residency_check(

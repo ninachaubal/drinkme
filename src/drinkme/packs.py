@@ -353,11 +353,16 @@ def checkpoint_gib(config: dict, ctx: int, slots: int, n_max: int) -> float:
     count the rules allow at this ctx (ctx_checkpoints.max_held) times one
     checkpoint's bytes (ctx_checkpoints.config_bytes: bf16 rings and conv
     states, float32 recurrent states), per slot. 0 for a model that takes
-    none (full attention only)."""
+    none (full attention only). A checkpoint with a vision tower
+    (`vision_config`) is charged its media-end checkpoints too
+    (ctx_checkpoints.py, MEDIA ENDS; DRINKME_MEDIA_CHECKPOINTS read
+    silently): the serve may read images, and charging them when it does
+    not is the safe side of an estimate."""
     from .serving import ctx_checkpoints
 
     one = ctx_checkpoints.config_bytes(config, 2, ctx)
-    return one * ctx_checkpoints.max_held(n_max, ctx) * slots / GIB
+    media = ctx_checkpoints.media_from_env(warn=False) if "vision_config" in config else 0
+    return one * ctx_checkpoints.max_held(n_max, ctx, media=media) * slots / GIB
 
 
 def hardware_budget() -> tuple[float | None, str]:

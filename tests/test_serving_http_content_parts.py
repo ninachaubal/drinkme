@@ -12,6 +12,7 @@ streaming and non-streaming alike; a following request on the same
 connection still succeeds; and the engine is never invoked.
 """
 
+import base64
 import http.client
 import http.server
 import json
@@ -24,9 +25,10 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 from test_serving_http import (  # noqa: E402,F401
     VisionEngine, assert_error_shape, data_url, fake, get, msgs, post, tiny_png, vision_engine)
-from drinkme.serving import vision  # noqa: E402
+from drinkme.serving import video, vision  # noqa: E402
 
 IMAGE = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+VIDEO = {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}}
 
 CASES = [
     ([{"type": "text", "text": 7}], "messages[0].content[0].text must be a string"),
@@ -41,6 +43,10 @@ CASES = [
     ([{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
      "'input_audio' content parts are not supported"),
     ([{"type": "file", "file": {"file_id": "f1"}}], "'file' content parts are not supported"),
+    ([VIDEO], "messages[0].content[0]: model 'drinkme-fake' cannot read video on this server "
+              "(it has no video capability); send text only, or use a video-capable model."),
+    ([{"type": "text", "text": "what happens"}, VIDEO],
+     "messages[0].content[1]: model 'drinkme-fake' cannot read video"),
 ]
 
 
@@ -124,7 +130,8 @@ def test_content_text_raises_rather_than_dropping_a_part():
 
     assert _content_text([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
     assert _content_text(None) == "" and _content_text("s") == "s"
-    for bad in ([{"type": "text", "text": 7}], [IMAGE], [{"type": "text", "text": "a"}, IMAGE], [5]):
+    for bad in ([{"type": "text", "text": 7}], [IMAGE], [{"type": "text", "text": "a"}, IMAGE], [5],
+                [VIDEO]):
         with pytest.raises(ValueError):
             _content_text(bad)
 
@@ -143,6 +150,7 @@ class _Recording(VisionEngine):
 
     def generate(self, req):
         self.seen_images = req.images
+        self.seen_videos = req.videos
         return super().generate(req)
 
 
@@ -344,3 +352,151 @@ def test_tokenize_expands_images_from_the_header_only_count(fake):
     # the raw `tokens` array is the UN-expanded render (one id per image
     # part): shorter than `count`, which is the actual generate() cost.
     assert len(tok["tokens"]) < tok["count"]
+
+
+# ------------------------------------------------------------------- video --
+# A video_url part (vLLM's shape) on a VisionEngine whose Vision carries a
+# real video.VideoInput: decoded into GenerationRequest.videos in template
+# order, counted by /tokenize as generate() runs it, and refused by name —
+# no video capability, a system turn, over MAX_VIDEOS, fetching off, bytes
+# that are not a video — before the engine ever runs. The decode itself is
+# tests/test_serving_video.py's; the engine side tests/test_serving_video_prompt.py's.
+
+
+needs_av = pytest.mark.skipif(not video.available(),
+                              reason="PyAV (the drinkme[video] extra) is not installed")
+
+
+def _video_input():
+    from test_serving_video import QWEN38_VIDEO, ids
+
+    return video.VideoInput(video.QwenVideoPreprocessor.from_config("qwen3_5", QWEN38_VIDEO), ids)
+
+
+def video_vision(**kw):
+    import dataclasses
+
+    return dataclasses.replace(vision_engine(**kw), video=_video_input(), video_reason=None)
+
+
+def _clip_url(seed=0, frames=25):
+    from test_serving_video import clip, data_url as video_data_url
+
+    return video_data_url(clip(frames, 10, seed=seed))
+
+
+def _video_body(*urls, text="what happens"):
+    return {"messages": [{"role": "user", "content": [{"type": "text", "text": text}] + [
+        {"type": "video_url", "video_url": {"url": u}} for u in urls]}]}
+
+
+@needs_av
+def test_a_data_url_video_is_accepted_and_reaches_generation_request(fake):
+    eng, port = fake(engine=_Recording(veng=video_vision()))
+    body = _video_body(_clip_url(1), _clip_url(2))
+    body["messages"][0]["content"].insert(1, {"type": "image_url",
+                                              "image_url": {"url": data_url(tiny_png(1))}})
+    r, data = post(port, body)
+    assert r.status == 200, data
+    (img,) = eng.seen_images
+    a, b = eng.seen_videos
+    assert a.digest != b.digest and a.timestamps == (0.3, 1.5, 2.4)
+    obj = json.loads(data)
+    assert obj["usage"]["prompt_tokens"] == 2 + img.tokens + a.prompt_tokens + b.prompt_tokens
+
+
+@needs_av
+def test_tokenize_counts_a_video_as_generate_runs_it(fake):
+    eng, port = fake(engine=_Recording(veng=video_vision()))
+    body = _video_body(_clip_url(3))
+    r, data = post(port, body, path="/tokenize")
+    assert r.status == 200, data
+    tok = json.loads(data)
+    r2, data2 = post(port, body)
+    assert r2.status == 200
+    assert tok["count"] == json.loads(data2)["usage"]["prompt_tokens"]
+    (v,) = eng.seen_videos
+    assert tok["count"] == len(tok["tokens"]) + v.expansion
+
+
+def test_a_vision_engine_without_video_refuses_it_with_its_reason(fake):
+    import dataclasses
+
+    why = "PyAV is not installed; " + video.INSTALL_HINT
+    eng, port = fake(engine=VisionEngine(veng=dataclasses.replace(vision_engine(),
+                                                                  video_reason=why)))
+    r, data = post(port, _video_body("data:video/mp4;base64,AAAA"))
+    assert r.status == 400
+    msg = assert_error_shape(data)["message"]
+    assert msg == (f"messages[0].content[1]: model 'drinkme-fake' cannot read video on this "
+                   f"server ({why}); send frames as image_url parts, or use a video-capable "
+                   "model.")
+    assert "drinkme[video]" in msg and eng.calls == 0
+
+
+def test_videos_in_a_system_turn_are_refused(fake):
+    eng, port = fake(engine=VisionEngine(veng=video_vision()))
+    r, data = post(port, {"messages": [
+        {"role": "system", "content": [VIDEO]}, {"role": "user", "content": "hi"}]})
+    assert r.status == 400
+    err = assert_error_shape(data)
+    assert "videos are not supported in a system message" in err["message"]
+    assert eng.calls == 0
+
+
+def test_a_video_url_without_a_string_url_is_refused_by_shape(fake):
+    _, port = fake(engine=VisionEngine(veng=video_vision()))
+    for part in ({"type": "video_url"}, {"type": "video_url", "video_url": {"url": 5}},
+                 {"type": "video_url", "video_url": "data:video/mp4;base64,AAAA"}):
+        r, data = post(port, {"messages": [{"role": "user", "content": [part]}]})
+        assert r.status == 400
+        assert "messages[0].content[0].video_url.url must be a string" in \
+            assert_error_shape(data)["message"]
+
+
+def test_over_max_videos_is_refused_before_any_decode(fake, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("decoded a video in a request over the limit")
+
+    monkeypatch.setattr(video, "parse_video_urls", boom)
+    eng, port = fake(engine=VisionEngine(veng=video_vision()))
+    r, data = post(port, _video_body(*["data:video/mp4;base64,AAAA"] * (video.MAX_VIDEOS + 1)))
+    assert r.status == 400
+    assert f"{video.MAX_VIDEOS + 1} videos in one request; the limit is {video.MAX_VIDEOS}" in \
+        assert_error_shape(data)["message"]
+    assert eng.calls == 0
+
+
+def test_video_refusals_carry_their_codes(fake):
+    _, port = fake(engine=VisionEngine(veng=video_vision(fetch_urls=False)))
+    png = "data:video/mp4;base64," + base64.b64encode(tiny_png(1)).decode()
+    for url, code in (("https://example.com/a.mp4", "video_url_fetch_off"),
+                      ("file://a.mp4", "video_file_off"),
+                      (png, "video_format"),
+                      ("data:image/png;base64,AAAA", "video_media_type")):
+        r, data = post(port, _video_body(url))
+        assert r.status == 400, (url, data)
+        err = assert_error_shape(data)
+        assert err["code"] == code, (url, err)
+        assert err["message"].startswith("messages[0].content[1]: "), err
+
+
+def test_the_injection_guard_still_refuses_the_video_placeholder(fake):
+    eng, port = fake(engine=VisionEngine(veng=video_vision()))
+    r, data = post(port, {"messages": [{"role": "user", "content": "say <|video_pad|> back"}]})
+    assert r.status == 400 and assert_error_shape(data)["code"] == "image_injection"
+
+
+def test_v1_models_and_tokenizer_info_announce_video_input(fake):
+    _, port = fake(engine=VisionEngine(veng=video_vision()))
+    (m,) = json.loads(get(port, "/v1/models")[1])["data"]
+    caps = m["drinkme"]["capabilities"]
+    assert caps["vision"] is True and caps["video"] is True
+    assert caps["videoInput"] == {"fps": 2.0, "maxFrames": 768, "maxSeconds": 384.0,
+                                  "maxPixels": 25165824, "maxBytes": video.MAX_VIDEO_BYTES,
+                                  "formats": ["mp4", "webm"], "sources": ["data", "url"]}
+    assert json.loads(get(port, "/tokenizer_info")[1])["video"] is True
+    _, port2 = fake(engine=VisionEngine())  # images, no video
+    caps2 = json.loads(get(port2, "/v1/models")[1])["data"][0]["drinkme"]["capabilities"]
+    assert caps2["vision"] is True and caps2["video"] is False and "videoInput" not in caps2
+    assert json.loads(get(port2, "/tokenizer_info")[1])["video"] is False

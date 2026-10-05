@@ -607,6 +607,7 @@ def run(repo: str, revision: str | None, host: str = "127.0.0.1", port: int = DE
         runtime: str | None = None,
         menu_name: str | None = None,
         image_max_pixels: int | None = None,
+        tower_cache_gib: float | None = None,
         no_image_urls: bool = False,
         media_path: str | None = None,
         hub_pack: bool = True) -> int:
@@ -656,6 +657,11 @@ def run(repo: str, revision: str | None, host: str = "127.0.0.1", port: int = DE
     it (serving/vision.max_pixels_from_env). None leaves the environment
     alone, and then its value or the default 2560x1440 holds.
 
+    `tower_cache_gib` is --tower-cache-gib, the vision tower output cache's
+    cap (serving/tower_cache.py), applied the same way: a non-None value
+    WRITES DRINKME_TOWER_CACHE_GIB, which the engine reads at construction,
+    a level-2 wake's included.
+
     `no_image_urls` is --no-image-urls (http(s) image URLs are fetched
     by default, llama.cpp parity): False (the default; the flag absent)
     leaves DRINKME_IMAGE_URLS alone, so an operator can still set it
@@ -689,6 +695,8 @@ def run(repo: str, revision: str | None, host: str = "127.0.0.1", port: int = DE
         os.environ["DRINKME_CTX_CHECKPOINTS"] = str(ctx_checkpoints)
     if image_max_pixels is not None:
         os.environ["DRINKME_IMAGE_MAX_PIXELS"] = str(image_max_pixels)
+    if tower_cache_gib is not None:
+        os.environ["DRINKME_TOWER_CACHE_GIB"] = str(tower_cache_gib)
     if no_image_urls:
         os.environ["DRINKME_IMAGE_URLS"] = "0"
     if media_path is not None:

@@ -344,6 +344,38 @@ def vision_refusal_message(where: str, model_id: str, why: str | None) -> str:
             f"({why}); send text only, or use a vision-capable model.")
 
 
+def video_reason(engine) -> str | None:
+    """Why THIS engine reads no video: its vision_reason when it reads no
+    images either, else its Vision's video_reason (no video processor for
+    the architecture or in the checkpoint, PyAV not installed); None when
+    it does read video."""
+    veng = engine_vision(engine)
+    if veng is None:
+        return vision_reason(engine)
+    return None if getattr(veng, "video", None) is not None else veng.video_reason
+
+
+def video_refusal_message(where: str, model_id: str, why: str | None, *,
+                          images: bool = False) -> str:
+    """The named 400 for a video part this engine cannot read:
+    vision_refusal_message's shape, worded for video (`why`,
+    video_reason(engine)). An engine that reads images (`images`) is
+    pointed at sending frames as images instead."""
+    why = why or "it has no video capability"
+    alt = "send frames as image_url parts" if images else "send text only"
+    return (f"{where}: model {model_id!r} cannot read video on this server "
+            f"({why}); {alt}, or use a video-capable model.")
+
+
+def video_input_block(veng: "vision.Vision") -> dict:
+    """The /v1/models `drinkme.capabilities.videoInput` object for an
+    engine that reads video: the processor's sampling rate and frame and
+    pixel budgets, the limits serving/video.py adds (the longest clip, the
+    byte cap), the containers it reads, and the sources this server accepts
+    (image_input_block's, which video shares)."""
+    return dict(veng.video.block(), sources=image_input_block(veng)["sources"])
+
+
 def check_injection(text: str, veng: "vision.Vision | None", where: str) -> None:
     """The injection guard: text that spells one of the architecture's
     image placeholder literals (`<|image_pad|>` and friends,

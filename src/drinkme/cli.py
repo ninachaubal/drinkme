@@ -90,6 +90,19 @@ def _pixels_arg(raw: str) -> int:
             f"{raw!r} is not a pixel count: give N or WxH (e.g. 2560x1440)") from None
 
 
+def _gib_arg(raw: str) -> float:
+    """--tower-cache-gib GIB: a size of 0 or more, refused at parse time like
+    a bad --image-max-pixels (a bad DRINKME_TOWER_CACHE_GIB warns and falls
+    back instead: serving/tower_cache.cap_from_env)."""
+    try:
+        val = float(raw)
+    except ValueError:
+        val = -1.0
+    if not val >= 0:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a size in GiB of 0 or more")
+    return val
+
+
 def _media_path_arg(raw: str) -> str:
     """--media-path DIR, validated and resolved to a real path HERE (at
     parse time): a directory a human just typed wrong should fail loud and
@@ -354,14 +367,21 @@ def main(argv: list[str] | None = None) -> int:
                          "or set DRINKME_IMAGE_MAX_PIXELS — this flag wins if "
                          "both are set). A request's detail 'low' asks for "
                          "512x512; nothing a request sends can raise the cap")
+    sv.add_argument("--tower-cache-gib", type=_gib_arg, default=None, metavar="GIB",
+                    help="host RAM for the vision tower's outputs, so an image or "
+                         "video sent again skips the tower in any conversation "
+                         "(default 0.5; 0 turns it off; or set "
+                         "DRINKME_TOWER_CACHE_GIB — this flag wins if both are "
+                         "set). Least recently used out first")
     sv.add_argument("--no-image-urls", action="store_true",
-                    help="do not fetch http(s) image URLs (or set "
-                         "DRINKME_IMAGE_URLS=0); default: fetch them (10s "
-                         "timeout, 20 MiB cap, no address filtering — turn this "
-                         "off if the server is reachable from other machines)")
+                    help="do not fetch http(s) image or video URLs (or set "
+                         "DRINKME_IMAGE_URLS=0); default: fetch them (an image: 10s "
+                         "timeout, 20 MiB cap; a video: 30s, 64 MiB; no address "
+                         "filtering — turn this off if the server is reachable "
+                         "from other machines)")
     sv.add_argument("--media-path", type=_media_path_arg, default=None, metavar="DIR",
-                    help="serve file:// image paths relative to this existing "
-                         "directory, llama.cpp semantics (or set "
+                    help="serve file:// image and video paths relative to this "
+                         "existing directory, llama.cpp semantics (or set "
                          "DRINKME_MEDIA_PATH); default: unset, file:// is refused")
     sv.add_argument("--yes", action="store_true",
                     help="skip the confirm prompt; serve the pick (default "
@@ -655,6 +675,7 @@ def main(argv: list[str] | None = None) -> int:
                          served_names=a.served_model_name, generation_profile_flags=a.profile,
                          sleep_on_idle=a.sleep_on_idle, rope_scaling=a.rope_scaling,
                          runtime=a.runtime, image_max_pixels=a.image_max_pixels,
+                         tower_cache_gib=a.tower_cache_gib,
                          no_image_urls=a.no_image_urls, media_path=a.media_path,
                          hub_pack=not a.no_hub_pack,
                          # resolve_model maps a menu name to its repo and returns a

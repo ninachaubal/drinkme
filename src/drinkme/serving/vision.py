@@ -221,18 +221,27 @@ def parse_base64(data, media_type: str | None = None, *, where: str) -> EncodedI
     else that is not base64 is refused."""
     if media_type is not None:
         _check_media_type(media_type, where)
+    return _decoded_bytes(base64_bytes(data, where=where), where=where, noun="image")
+
+
+def base64_bytes(data, *, where: str, kind: "MediaKind | None" = None) -> bytes:
+    """A base64 string -> its bytes, for an image (the default) or a video
+    (serving/video.py): ASCII whitespace ignored, missing `=` padding
+    restored, and a payload over the kind's byte cap refused from its
+    length, before it is decoded."""
+    kind = kind or IMAGE
+    err, noun, cap = kind.error, kind.noun, kind.max_bytes()
     if not isinstance(data, str):
-        raise ImageError(where, "image_base64", "image data must be a base64 string")
+        raise err(where, f"{noun}_base64", f"{noun} data must be a base64 string")
     s = "".join(data.split())
-    if len(s) // 4 * 3 > MAX_ENCODED_BYTES + 3:  # refused before decoding it
-        raise ImageError(where, "image_too_large",
-                         f"image is over {MAX_ENCODED_BYTES // (1024 * 1024)} MiB once decoded")
+    if len(s) // 4 * 3 > cap + 3:  # refused before decoding it
+        raise err(where, f"{noun}_too_large",
+                  f"{noun} is over {cap // (1024 * 1024)} MiB once decoded")
     s += "=" * (-len(s) % 4)
     try:
-        raw = base64.b64decode(s, validate=True)
+        return base64.b64decode(s, validate=True)
     except (binascii.Error, ValueError):
-        raise ImageError(where, "image_base64", "image data is not valid base64") from None
-    return _decoded_bytes(raw, where=where, noun="image")
+        raise err(where, f"{noun}_base64", f"{noun} data is not valid base64") from None
 
 
 def sources_message(*, fetch_urls: bool, media_path: str | None) -> str:
@@ -270,171 +279,225 @@ def _decoded_bytes(data: bytes, *, where: str, noun: str) -> EncodedImage:
     return EncodedImage(data, fmt)
 
 
-def _fetch_url_bytes(url: str, *, where: str) -> bytes:
+@dataclass(frozen=True)
+class MediaKind:
+    """What differs between fetching or reading an image and a video
+    (serving/video.py) through the one set of source rules below: the noun
+    the refusal messages and codes use (`image_fetch_timeout`,
+    `video_fetch_timeout`, ...), the error class, the byte cap and the
+    fetch deadline (callables, so the module globals behind them are read
+    at call time and a test can monkeypatch them), the Accept header, and
+    the data URL a refusal shows as the example."""
+
+    noun: str
+    error: type
+    max_bytes: Callable[[], int]
+    timeout_s: Callable[[], float]
+    accept: str
+    example: str
+
+
+IMAGE = MediaKind("image", ImageError, lambda: MAX_ENCODED_BYTES, lambda: FETCH_TIMEOUT_S,
+                  "image/*", "data:image/png;base64,...")
+
+
+def _fetch_url_bytes(url: str, *, where: str, kind: MediaKind = IMAGE) -> bytes:
     """GET url over http(s), stdlib only (http.client — no new dependency):
-    one wall-clock deadline (FETCH_TIMEOUT_S) covers every redirect hop and
-    the whole body read; at most FETCH_MAX_REDIRECTS hops; the read is
-    ABORTED the instant it passes MAX_ENCODED_BYTES, never buffered then
-    checked. FETCH_TIMEOUT_S/MAX_ENCODED_BYTES are read from the module
-    globals at call time (not bound as default parameters) so a test can
-    monkeypatch them down. NO address filtering: the server fetches
-    whatever the operator's own client asked it to, from the operator's
-    own network position (module docstring)."""
-    deadline = time.monotonic() + FETCH_TIMEOUT_S
+    one wall-clock deadline (FETCH_TIMEOUT_S for an image) covers every
+    redirect hop and the whole body read; at most FETCH_MAX_REDIRECTS hops;
+    the read is ABORTED the instant it passes the kind's byte cap
+    (MAX_ENCODED_BYTES for an image), never buffered then checked. Both
+    are read from the module globals at call time (not bound as default
+    parameters) so a test can monkeypatch them down. NO address filtering:
+    the server fetches whatever the operator's own client asked it to,
+    from the operator's own network position (module docstring)."""
+    err, noun = kind.error, kind.noun
+    timeout_s, cap = kind.timeout_s(), kind.max_bytes()
+    deadline = time.monotonic() + timeout_s
     for _ in range(FETCH_MAX_REDIRECTS + 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ImageError(where, "image_fetch_timeout",
-                             f"fetching {url!r} timed out after {FETCH_TIMEOUT_S:g}s")
+            raise err(where, f"{noun}_fetch_timeout",
+                      f"fetching {url!r} timed out after {timeout_s:g}s")
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in ("http", "https"):
-            raise ImageError(where, "image_url",
-                             f"{url!r}: only http(s), file:// and data: URLs are accepted")
+            raise err(where, f"{noun}_url",
+                      f"{url!r}: only http(s), file:// and data: URLs are accepted")
         if not parsed.hostname:
-            raise ImageError(where, "image_url", f"{url!r}: no host")
+            raise err(where, f"{noun}_url", f"{url!r}: no host")
         cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         conn = cls(parsed.hostname, parsed.port, timeout=remaining)
         target = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
         try:
             conn.request("GET", target, headers={"User-Agent": "drinkme/1.0",
-                                                  "Accept": "image/*"})
+                                                  "Accept": kind.accept})
             resp = conn.getresponse()
         except TimeoutError:
             conn.close()
-            raise ImageError(where, "image_fetch_timeout",
-                             f"fetching {url!r} timed out after {FETCH_TIMEOUT_S:g}s") from None
+            raise err(where, f"{noun}_fetch_timeout",
+                      f"fetching {url!r} timed out after {timeout_s:g}s") from None
         except OSError as e:
             conn.close()
-            raise ImageError(where, "image_fetch_unreachable",
-                             f"could not fetch {url!r} ({e})") from None
+            raise err(where, f"{noun}_fetch_unreachable",
+                      f"could not fetch {url!r} ({e})") from None
         if resp.status in (301, 302, 303, 307, 308):
             location = resp.getheader("Location")
             resp.read()
             conn.close()
             if not location:
-                raise ImageError(where, "image_fetch_status",
-                                 f"{url!r} redirected ({resp.status}) with no Location header")
+                raise err(where, f"{noun}_fetch_status",
+                          f"{url!r} redirected ({resp.status}) with no Location header")
             url = urllib.parse.urljoin(url, location)
             continue
         if not (200 <= resp.status < 300):
             resp.read()
             conn.close()
-            raise ImageError(where, "image_fetch_status",
-                             f"fetching {url!r} got HTTP {resp.status}")
+            raise err(where, f"{noun}_fetch_status", f"fetching {url!r} got HTTP {resp.status}")
         data = bytearray()
         try:
             while True:
                 if time.monotonic() > deadline:
-                    raise ImageError(where, "image_fetch_timeout",
-                                     f"fetching {url!r} timed out after {FETCH_TIMEOUT_S:g}s")
+                    raise err(where, f"{noun}_fetch_timeout",
+                              f"fetching {url!r} timed out after {timeout_s:g}s")
                 chunk = resp.read(65536)
                 if not chunk:
                     break
                 data += chunk
-                if len(data) > MAX_ENCODED_BYTES:
-                    raise ImageError(where, "image_too_large",
-                                     f"fetching {url!r}: over "
-                                     f"{MAX_ENCODED_BYTES // (1024 * 1024)} MiB")
+                if len(data) > cap:
+                    raise err(where, f"{noun}_too_large",
+                              f"fetching {url!r}: over {cap // (1024 * 1024)} MiB")
         except TimeoutError:
-            raise ImageError(where, "image_fetch_timeout",
-                             f"fetching {url!r} timed out after {FETCH_TIMEOUT_S:g}s") from None
+            raise err(where, f"{noun}_fetch_timeout",
+                      f"fetching {url!r} timed out after {timeout_s:g}s") from None
         finally:
             conn.close()
         return bytes(data)
-    raise ImageError(where, "image_fetch_status", f"{url!r}: too many redirects")
+    raise err(where, f"{noun}_fetch_status", f"{url!r}: too many redirects")
 
 
-def _read_media_file(url: str, media_path: str, *, where: str) -> EncodedImage:
-    """`file://` + `media_path` (llama.cpp's --media-path semantics): the
-    path after `file://` is relative to `media_path`, never absolute,
-    never containing a `..` segment, and its resolved real path (symlinks
-    followed) must stay inside `media_path` — every one of those is a
-    named 400, not a silent clamp."""
+def _read_media_bytes(url: str, media_path: str, *, where: str,
+                      kind: MediaKind = IMAGE) -> tuple[str, bytes]:
+    """`file://` + `media_path` (llama.cpp's --media-path semantics) ->
+    (the relative path, at most the kind's byte cap plus one byte of the
+    file): the path after `file://` is relative to `media_path`, never
+    absolute, never containing a `..` segment, and its resolved real path
+    (symlinks followed) must stay inside `media_path` — every one of those
+    is a named 400, not a silent clamp."""
+    err, code = kind.error, f"{kind.noun}_file_path"
     raw = urllib.parse.unquote(url[len("file://"):])
     if os.path.isabs(raw):
-        raise ImageError(where, "image_file_path",
-                         "file:// paths must be relative to the configured media "
-                         "directory; an absolute path is refused")
+        raise err(where, code, "file:// paths must be relative to the configured media "
+                  "directory; an absolute path is refused")
     segments = raw.split("/")
     if not raw or any(seg in ("", "..") for seg in segments):
-        raise ImageError(where, "image_file_path",
-                         f"{raw!r} is not a valid relative path under the media "
-                         "directory ('..' and empty segments are refused)")
+        raise err(where, code, f"{raw!r} is not a valid relative path under the media "
+                  "directory ('..' and empty segments are refused)")
     root = os.path.realpath(media_path)
     candidate = os.path.realpath(os.path.join(root, raw))
     if candidate != root and not candidate.startswith(root + os.sep):
-        raise ImageError(where, "image_file_path", f"{raw!r} resolves outside the media directory")
+        raise err(where, code, f"{raw!r} resolves outside the media directory")
     if not os.path.isfile(candidate):
-        raise ImageError(where, "image_file_path", f"no such file: {raw!r}")
+        raise err(where, code, f"no such file: {raw!r}")
     try:
         with open(candidate, "rb") as f:
-            data = f.read(MAX_ENCODED_BYTES + 1)
+            data = f.read(kind.max_bytes() + 1)
     except OSError as e:
-        raise ImageError(where, "image_file_path", f"could not read {raw!r} ({e})") from None
+        raise err(where, code, f"could not read {raw!r} ({e})") from None
+    return raw, data
+
+
+def _read_media_file(url: str, media_path: str, *, where: str) -> EncodedImage:
+    """An image at a `file://` path under `media_path` (_read_media_bytes)."""
+    raw, data = _read_media_bytes(url, media_path, where=where)
     return _decoded_bytes(data, where=where, noun=f"{raw!r}")
+
+
+def parse_media_url(url, *, where: str, fetch_urls: bool, media_path: str | None,
+                    kind: MediaKind, from_bytes: Callable, from_base64: Callable):
+    """The source rules every media URL follows, image or video: a data:
+    URL decodes inline (`from_base64(body, media_type, where=)`); an
+    http(s) URL is fetched (`_fetch_url_bytes`) unless `fetch_urls` is
+    False; a file:// path resolves under `media_path`
+    (`_read_media_bytes`) when one is given. Fetched and read bytes go
+    through `from_bytes(data, where=, noun=)`, the kind's own size cap and
+    magic-byte sniff. Every refusal names what IS accepted
+    (`sources_message`)."""
+    err, noun = kind.error, kind.noun
+    if not isinstance(url, str):
+        raise err(where, f"{noun}_url", f"{noun} URL must be a string")
+    head = url[:16].lower()
+    if head.startswith(("http://", "https://")):
+        if not fetch_urls:
+            raise err(where, f"{noun}_url_fetch_off",
+                      f"{noun} URLs are not fetched on this server; send "
+                      + sources_message(fetch_urls=False, media_path=media_path))
+        data = _fetch_url_bytes(url, where=where, kind=kind)
+        return from_bytes(data, where=where, noun=f"the fetched {noun} ({url!r})")
+    if head.startswith("file://"):
+        if not media_path:
+            raise err(where, f"{noun}_file_off",
+                      f"file:// {noun} paths are not accepted on this server (no "
+                      "--media-path is configured); send "
+                      + sources_message(fetch_urls=fetch_urls, media_path=None))
+        raw, data = _read_media_bytes(url, media_path, where=where, kind=kind)
+        return from_bytes(data, where=where, noun=f"{raw!r}")
+    if not head.startswith("data:"):
+        raise err(where, f"{noun}_url",
+                  f"{noun} URL must be http(s), file:// or a data URL; send "
+                  + sources_message(fetch_urls=fetch_urls, media_path=media_path))
+    comma = url.find(",", 0, 256)
+    if comma < 0:
+        raise err(where, f"{noun}_data_url", "malformed data URL (no ',' after the media type)")
+    params = [p.strip().lower() for p in url[5:comma].split(";")]
+    if "base64" not in params[1:]:
+        raise err(where, f"{noun}_data_url",
+                  f"data URL must be base64-encoded ({kind.example})")
+    return from_base64(url[comma + 1:], params[0], where=where)
 
 
 def parse_image_url(url, *, where: str, fetch_urls: bool = True,
                     media_path: str | None = None) -> EncodedImage:
     """An `image_url` string (OpenAI Chat's `image_url.url`, Responses'
     `input_image.image_url`, and Anthropic's `source.type: "url"` value)
-    -> EncodedImage: a data: URL decodes inline; an http(s) URL is fetched
-    (`_fetch_url_bytes`) unless `fetch_urls` is False; a file:// path
-    resolves under `media_path` (`_read_media_file`) when one is given.
-    Every refusal names what IS accepted (`sources_message`)."""
-    if not isinstance(url, str):
-        raise ImageError(where, "image_url", "image URL must be a string")
-    head = url[:16].lower()
-    if head.startswith(("http://", "https://")):
-        if not fetch_urls:
-            raise ImageError(where, "image_url_fetch_off",
-                             "image URLs are not fetched on this server; send "
-                             + sources_message(fetch_urls=False, media_path=media_path))
-        data = _fetch_url_bytes(url, where=where)
-        return _decoded_bytes(data, where=where, noun=f"the fetched image ({url!r})")
-    if head.startswith("file://"):
-        if not media_path:
-            raise ImageError(where, "image_file_off",
-                             "file:// image paths are not accepted on this server (no "
-                             "--media-path is configured); send "
-                             + sources_message(fetch_urls=fetch_urls, media_path=None))
-        return _read_media_file(url, media_path, where=where)
-    if not head.startswith("data:"):
-        raise ImageError(where, "image_url",
-                         "image URL must be http(s), file:// or a data URL; send "
-                         + sources_message(fetch_urls=fetch_urls, media_path=media_path))
-    comma = url.find(",", 0, 256)
-    if comma < 0:
-        raise ImageError(where, "image_data_url", "malformed data URL (no ',' after the media type)")
-    params = [p.strip().lower() for p in url[5:comma].split(";")]
-    if "base64" not in params[1:]:
-        raise ImageError(where, "image_data_url",
-                         "data URL must be base64-encoded (data:image/png;base64,...)")
-    return parse_base64(url[comma + 1:], params[0], where=where)
+    -> EncodedImage, by parse_media_url's source rules: a data: URL
+    decodes inline (`parse_base64`); an http(s) URL is fetched unless
+    `fetch_urls` is False; a file:// path resolves under `media_path` when
+    one is given."""
+    return parse_media_url(url, where=where, fetch_urls=fetch_urls, media_path=media_path,
+                           kind=IMAGE, from_bytes=_decoded_bytes, from_base64=parse_base64)
 
 
-def parse_image_urls(pairs: list[tuple[str, str]], *, fetch_urls: bool = True,
-                     media_path: str | None = None) -> list[EncodedImage]:
-    """`parse_image_url` over several (url, where) pairs at once: every
-    http(s) URL's DOWNLOAD runs concurrently in a thread pool (network I/O
-    only — the GIL releases during a socket read; decoding stays out of
-    the pool since it is CPU-bound), so several images in one request or
-    one turn fetch at once rather than one after another. Returns
-    EncodedImages in the SAME order as `pairs`; the first one (in that
-    order) to raise is what propagates, matching one-at-a-time semantics
-    for the client. A single pair skips the pool entirely."""
+def parse_many(pairs: list[tuple[str, str]], parse_one: Callable) -> list:
+    """`parse_one(url, where=)` over several (url, where) pairs at once:
+    every http(s) URL's DOWNLOAD runs concurrently in a thread pool
+    (network I/O only — the GIL releases during a socket read; decoding
+    stays out of the pool since it is CPU-bound), so several images or
+    videos in one request or one turn fetch at once rather than one after
+    another. Returns the results in the SAME order as `pairs`; the first
+    one (in that order) to raise is what propagates, matching
+    one-at-a-time semantics for the client. A single pair skips the pool
+    entirely."""
     if len(pairs) <= 1:
-        return [parse_image_url(u, where=w, fetch_urls=fetch_urls, media_path=media_path)
-                for u, w in pairs]
+        return [parse_one(u, where=w) for u, w in pairs]
     from concurrent.futures import ThreadPoolExecutor
 
     ex = ThreadPoolExecutor(max_workers=min(FETCH_MAX_WORKERS, len(pairs)))
     try:
-        futures = [ex.submit(parse_image_url, u, where=w, fetch_urls=fetch_urls,
-                             media_path=media_path) for u, w in pairs]
+        futures = [ex.submit(parse_one, u, where=w) for u, w in pairs]
         return [f.result() for f in futures]
     finally:
         ex.shutdown(wait=False)
+
+
+def parse_image_urls(pairs: list[tuple[str, str]], *, fetch_urls: bool = True,
+                     media_path: str | None = None) -> list[EncodedImage]:
+    """`parse_image_url` over several (url, where) pairs at once, the
+    downloads concurrent (`parse_many`). Returns EncodedImages in the SAME
+    order as `pairs`."""
+    def one(u, *, where):
+        return parse_image_url(u, where=where, fetch_urls=fetch_urls, media_path=media_path)
+
+    return parse_many(pairs, one)
 
 
 def check_image_count(n: int, *, where: str = "request") -> None:
@@ -770,12 +833,20 @@ class Vision:
     server's pixel cap, and its http(s)/file:// posture. The dialects call
     `count` and `prepare`, and read `fetch_urls`/`media_path` to pass to
     `parse_image_url(s)`. The engine reads `architecture` and
-    `reserved_text`."""
+    `reserved_text`.
+
+    `video` is the same engine's video input (serving/video.py), which
+    rides on the image input because the same tower reads it and the same
+    source posture fetches it: a video.VideoInput, or None with
+    `video_reason` saying why (no video processor for the architecture or
+    in the checkpoint, PyAV not installed)."""
 
     preprocessor: Preprocessor
     max_pixels: int = DEFAULT_MAX_PIXELS
     fetch_urls: bool = True
     media_path: str | None = None
+    video: "video.VideoInput | None" = None
+    video_reason: str | None = "this server has no video input for the model"
 
     @property
     def architecture(self) -> str:
@@ -793,10 +864,13 @@ class Vision:
         per image (count_tokens, /tokenize)."""
         return image.tokens + self.preprocessor.wrap
 
-    def expansion(self, images) -> int:
-        """What expanding `images`' placeholders adds to a rendered
-        prompt's token count."""
-        return sum(self.prompt_tokens(img) - 1 for img in images)
+    def expansion(self, images, videos=()) -> int:
+        """What expanding `images`' and `videos`' placeholders adds to a
+        rendered prompt's token count (a video's own
+        video.PreparedVideo.expansion: its timestamps, markers and runs,
+        less the three ids the template rendered it as)."""
+        return (sum(self.prompt_tokens(img) - 1 for img in images)
+                + sum(v.expansion for v in videos))
 
     def budget(self, detail=None, *, where: str = "image") -> int:
         """A request's `detail` -> its pixel budget. None, "auto" and "high"
@@ -840,17 +914,23 @@ class Vision:
 
 
 def load(model_type: str, checkpoint_dir: str, *, max_pixels: int | None = None,
-        fetch_urls: bool | None = None, media_path: str | None = None) -> Vision | None:
+        fetch_urls: bool | None = None, media_path: str | None = None,
+        encode: Callable[[str], list[int]] | None = None) -> Vision | None:
     """The Vision for a checkpoint (a snapshot, or a pack's embedded
     checkpoint/), or None when its architecture has no registered
     preprocessor or the factory declines. `max_pixels`/`fetch_urls`/
     `media_path` None reads max_pixels_from_env/fetch_urls_from_env/
-    media_path_from_env."""
+    media_path_from_env. `encode` is the engine tokenizer's text -> ids
+    (no special tokens), which a video's timestamps are written with; the
+    Vision's `video` is serving/video.load's answer for the checkpoint."""
     pre = preprocessor_for(model_type, read_processor_config(checkpoint_dir))
     if pre is None:
         return None
+    from . import video
+
+    vid, why = video.load(model_type, checkpoint_dir, encode)
     return Vision(pre, max_pixels_from_env(max_pixels), fetch_urls_from_env(fetch_urls),
-                 media_path_from_env(media_path))
+                 media_path_from_env(media_path), vid, why)
 
 
 # ---------------------------------------------------------- Qwen3.5 -------
@@ -1401,7 +1481,10 @@ class Tower:
     or plain 1-D ones (gemma-4, Muse-Glimmer). `boi`/`eoi` are the ids the
     placeholder's expansion puts around the image's run (gemma-4's
     `<|image>`/`<image|>`; None where the template renders its own
-    markers).
+    markers). `video_token_id` is the id a video's runs carry and
+    `vision_start_id`/`vision_end_id` the markers the template renders a
+    video's placeholder between, for a tower that reads video (Qwen3.5;
+    serving/video.py); None elsewhere.
 
     `bidirectional` is how the text model attends among an image's run
     during prefill, the one fact that decides how a run may be prefilled
@@ -1423,6 +1506,9 @@ class Tower:
     boi: int | None = None
     eoi: int | None = None
     bidirectional: bool = False
+    video_token_id: int | None = None
+    vision_start_id: int | None = None
+    vision_end_id: int | None = None
 
     def __post_init__(self):
         if not self.paths:
@@ -1581,8 +1667,13 @@ def tower_for(model_type: str, cfg, paths: tuple[str, ...], tokenizer=None) -> T
         return GlimmerTower(model_type, paths[0], int(cfg.image_token_id),
                             int(vc.merge_size), mrope=False, paths=tuple(paths),
                             boi=ids[0], eoi=ids[1])
+    ids = [getattr(cfg, k, None) for k in ("video_token_id", "vision_start_token_id",
+                                           "vision_end_token_id")]
+    if any(i is None for i in ids):
+        ids = [None, None, None]
     return Tower(model_type, paths[0], int(cfg.image_token_id), int(vc.spatial_merge_size),
-                 paths=tuple(paths))
+                 paths=tuple(paths), video_token_id=ids[0], vision_start_id=ids[1],
+                 vision_end_id=ids[2])
 
 
 def bounded_attention(module, query, key, value, attention_mask=None, dropout=0.0,

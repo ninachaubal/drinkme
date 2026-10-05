@@ -69,8 +69,15 @@ Tests that pin behavior against real cached checkpoints' small files
 `test_serving_tool_formats.py`; `Qwen3-8B` and `Qwen3-1.7B` in
 `test_pack_resident_bytes.py`; the four vision models' configs and tokenizers
 in `test_serving_vision_attention.py`, `test_serving_glimmer_vision.py` and
-`test_serving_glimmer_channel.py`) skip on a machine whose Hugging Face cache
-lacks them, naming the missing revision. They never download.
+`test_serving_glimmer_channel.py`; Qwen3.8-27B's video config, template and
+tokenizer in `test_serving_video.py`) skip on a machine whose Hugging Face
+cache lacks them, naming the missing revision. They never download.
+
+The video tests that decode (`test_serving_video.py`,
+`test_serving_video_prompt.py`, the video halves of
+`test_serving_http_content_parts.py` and `test_serving_media_reuse.py`) need
+PyAV, the optional `drinkme[video]` extra, and skip without it, naming the
+extra.
 
 The HTTP tests bind a random localhost port over `FakeEngine`; a sandbox that
 forbids local sockets fails them rather than skipping.

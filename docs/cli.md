@@ -57,15 +57,17 @@ and [clients](clients.md) for base URLs, keys, and client recipes.
 | `--profile NAME=KEY:VAL,...` | none | named generation profile containing sampling and chat-template overrides, served as `<id>:NAME`; repeatable; overrides `profiles.json` beside the pack. Compression uses `drinkme pack --sip`/`--gulp` |
 | `--sleep-on-idle SEC` | 0 = never | park the model in host RAM after SEC seconds without a generation |
 | `--image-max-pixels N\|WxH` | 2560x1440 | the largest image a vision model reads: a bigger one is resized down to this many pixels. A request's `detail: "low"` asks for 512x512; nothing a request sends can raise the cap ([pixel cap](serve.md#the-pixel-cap)) |
-| `--no-image-urls` | off: URLs are fetched | do not fetch http(s) image URLs; a request must send the image as base64 (or a `file://` path under `--media-path`). Set it on a server other machines can reach: a fetch has a 10 s timeout and a 20 MiB cap but no address filtering ([sources](serve.md#sources)) |
-| `--media-path DIR` | unset | serve `file://` image paths relative to this existing directory; absolute paths, `..`, and symlinks that resolve outside it are refused. Unset, `file://` is refused. A directory that does not exist is a usage error |
+| `--tower-cache-gib GIB` | 0.5 | host RAM for the vision tower's outputs, least recently used out first: an image or video sent again skips the tower in any conversation; `0` turns it off ([tower output cache](serve.md#the-tower-output-cache)) |
+| `--no-image-urls` | off: URLs are fetched | do not fetch http(s) image or video URLs; a request must send the image or video as base64 (or a `file://` path under `--media-path`). Set it on a server other machines can reach: a fetch has a 10 s timeout and a 20 MiB cap (a video: 30 s, 64 MiB) but no address filtering ([sources](serve.md#sources)) |
+| `--media-path DIR` | unset | serve `file://` image and video paths relative to this existing directory; absolute paths, `..`, and symlinks that resolve outside it are refused. Unset, `file://` is refused. A directory that does not exist is a usage error |
 
 Equivalent environment variables: `DRINKME_CTX`, `DRINKME_ROPE_SCALING`, `DRINKME_AUTH_TOKEN`,
 `DRINKME_PREFIX_SLOTS`, `DRINKME_SPEC`, `DRINKME_ADVERTISED_CTX`,
 `DRINKME_SERVED_MODEL_NAMES` (space- or comma-separated), `DRINKME_SLEEP_ON_IDLE_S`,
-`DRINKME_IMAGE_MAX_PIXELS`, `DRINKME_IMAGE_URLS` (`0` for `--no-image-urls`),
-`DRINKME_MEDIA_PATH`. An unparseable `DRINKME_IMAGE_MAX_PIXELS` or a
-`DRINKME_MEDIA_PATH` that is not a directory warns at boot and falls back to
+`DRINKME_IMAGE_MAX_PIXELS`, `DRINKME_TOWER_CACHE_GIB`, `DRINKME_IMAGE_URLS` (`0`
+for `--no-image-urls`), `DRINKME_MEDIA_PATH`. An unparseable
+`DRINKME_IMAGE_MAX_PIXELS` or `DRINKME_TOWER_CACHE_GIB`, or a
+`DRINKME_MEDIA_PATH` that is not a directory, warns at boot and falls back to
 the default.
 
 ## `drinkme bench`
@@ -214,6 +216,7 @@ Serving:
 | `DRINKME_PREFILL_CHUNK` | 4096 | tokens per prefill forward pass, which bounds how long one GPU kernel runs ([serve.md](serve.md#chunked-prefill)); `0` = the whole prompt in one pass |
 | `DRINKME_SLOT_DIR` / `_DISK_GIB` / `_RAM_GIB` | `~/.cache/drinkme/slots` / 64 / 0 | the on-disk slot tier ([serve-prefix-slots.md](serve-prefix-slots.md)); `DRINKME_SLOT_DIR=off` disables it |
 | `DRINKME_CTX_CHECKPOINTS` | 32 | context checkpoints per prefix slot; `--ctx-checkpoints` wins ([serve-prefix-slots.md](serve-prefix-slots.md#context-checkpoints)) |
+| `DRINKME_MEDIA_CHECKPOINTS` | 2 | context checkpoints a prefix slot keeps at the end of an image or a video, on top of the others and within `--ctx-checkpoints`; `0` takes none ([serve-prefix-slots.md](serve-prefix-slots.md#context-checkpoints)) |
 | `DRINKME_MAX_TOKENS_CLAMP` | on | clamp `max_tokens` to the room left in the window; `0` = refuse with a 400 instead ([serve.md](serve.md)) |
 | `DRINKME_SSE_KEEPALIVE_S` | 10 | `: keep-alive` SSE comments while a stream waits in queue or prefill; `0` disables |
 | `DRINKME_IGNORE_GENERATION_CONFIG` | unset | `1` = plain OpenAI sampling defaults instead of the checkpoint's `generation_config.json` |
@@ -234,7 +237,7 @@ Serving:
 | `DRINKME_RAW_GEMV` | by target | the one-row call of the raw BF16 Linears at or above the codec's row threshold that a pack leaves raw (a tied `lm_head`) in `drinkme serve` over a pack and the bench's compressed and twin arms: `twin` = the twin arm's Triton GEMV over the raw weight, `stock` = the stock GEMV. Unset selects `twin` on gfx1151 and `stock` elsewhere; the boot log reports `[drinkme] raw gemv:`. See [raw GEMV](serve-kernels.md#raw-gemv) |
 | `DRINKME_CUDA_GRAPHS` | on (CUDA) | `0` = decode eager in `drinkme serve` and `drinkme bench`. Unset, the decode and speculative verify steps replay CUDA graphs on CUDA for the model families `serving/cudagraph.py` has verified; ROCm and Metal never do. The boot log reports `[drinkme] decode step:` and what the graphs hold per cache; the fit checks charge that memory unless this is `0` ([CUDA graphs](serve-kernels.md#cuda-graphs)) |
 | `DRINKME_CUDNN_SDPA` | off | `1` = let torch choose cuDNN attention on CUDA, for A/B comparison only: every fresh request thread pays cuDNN's plan builds again, the MTP head's included. Unset, `drinkme serve` and every `drinkme bench` arm run attention without cuDNN SDPA on CUDA, for decode and prefill; ROCm, Metal and the CPU keep torch's choice ([attention backend on CUDA](serve-kernels.md#attention-backend-on-cuda)) |
-| `DRINKME_VISION` | on | `0` = build no vision tower: its resident share goes to the KV cache, its pack tensors are never read, and images are refused naming the switch ([image input](serve.md#when-images-are-refused)) |
+| `DRINKME_VISION` | on | `0` = build no vision tower: its resident share goes to the KV cache, its pack tensors are never read, and images and videos are refused naming the switch ([image input](serve.md#when-images-are-refused)) |
 | `DRINKME_VISION_BOUNDED` | on | `0` = run the vision tower's attention as one call per image instead of dispatches of at most 33,554,432 query-key pairs; a reference for the bit-exactness gates, head-padded on ROCm either way ([ROCm](rocm.md#the-vision-tower-on-gfx1151)) |
 | `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL` | unset | ROCm parts AOTriton classifies experimental (gfx1151, gfx1102 measured), set before the process starts ([ROCm](rocm.md#attention-setup)) |
 

@@ -51,6 +51,14 @@ model read correctly on a 2880x1800 Retina screenshot at the default cap
 4.3 s on Muse-Glimmer-30B. [Image input](serve.md#image-input) covers the
 wire shapes, sources, limits and refusals.
 
+Qwen3.8-27B and MiMo-V2.6-Distill-Qwen-9B also read video, through the same
+tower, with the `drinkme[video]` extra installed: 2 frames per second of a
+clip, pairs of frames at one token per 32×32 pixels, at most 12,288 video
+tokens a clip whatever its length, each pair preceded by its timestamp in
+text ([video input](serve.md#video-input)). The CPU suite pins the
+preprocessing and the engine path to transformers; neither model's answers
+about a video have been measured on hardware yet.
+
 ## Automatic selection
 
 Without `--model`, `serve` scans `$DRINKME_HOME/packs`, combines canonical

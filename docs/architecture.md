@@ -86,13 +86,15 @@ HFEngine.generate
 ├─ ImagePrompt                    each placeholder expanded to its run (with gemma-4's and
 │                                 Muse-Glimmer's markers); key_ids: each run → its prefix_key;
 │                                 Qwen3.5's M-RoPE positions (mrope.rope_positions)
-├─ pick_slot, cold tier           on key_ids; an image inside the reused prefix never runs the tower
+├─ pick_slot, cold tier           on key_ids; an image inside the reused prefix never runs the tower;
+│                                 a context checkpoint at each media end (ImagePrompt.media_ends)
 ├─ prefill.spans(whole=…)         a causal run longer than the chunk is cut like text;
 │                                 a bidirectional run stays in one span
 ├─ prefill.run(image=…)           per span: inputs_embeds (embed_tokens, the tower's rows over the
 │                                 run), position_ids (Qwen3.5), the attention mask (gemma-4). The
 │                                 tower runs once per distinct image, its attention through
-│                                 vision.bounded_attention, and the pixels are released after
+│                                 vision.bounded_attention, and the pixels are released after;
+│                                 an image it read before comes from tower_cache.TowerCache
 └─ decode, verify, MTP head       position p + delta on Qwen3.5 (mrope.step_positions)
 ```
 
@@ -165,10 +167,12 @@ bench.run
   `detect.py` (hardware identity and budget), `fit.py` (the one fit
   primitive), `suggest.py` (the menu), `check.py` (eligibility from repo
   metadata), `packs.py`, `runtimes.py`, `serving/checkpoint.py`,
-  `serving/mrope.py` and `serving/vision.py` (whose tower half imports torch
-  inside its functions) import no torch at module level. This lets Metal
-  setup, `--dry-run`/`--detect-only`, checks before weight downloads, and
-  image parsing in the dialects run without torch. `probe.py` (bandwidth) needs the device.
+  `serving/mrope.py`, `serving/tower_cache.py`, `serving/vision.py` (whose
+  tower half imports torch inside its functions) and `serving/video.py` (torch
+  for the resize, PyAV for the decode, both inside its functions) import no
+  torch at module level.
+  This lets Metal setup, `--dry-run`/`--detect-only`, checks before weight
+  downloads, and image parsing in the dialects run without torch. `probe.py` (bandwidth) needs the device.
 
 ## Where the rest lives
 
@@ -217,12 +221,22 @@ bench.run
   `WORK_V` query-key pairs, its head zero-padded to a multiple of 16 on
   ROCm), the ROCm patch-embedding GEMM, and the boot self-test of the
   tower's attention ([ROCm](rocm.md#the-vision-tower-on-gfx1151)).
-- **`serving/image_prompt.py`**: one request's images as the forwards need
-  them: the expanded ids, the prefix-cache keys, the positions, the
+- **`serving/video.py`**: video input for Qwen3.5: the `video_url` sources
+  (vision.py's rules with a video's caps), PyAV decoding (the optional
+  `drinkme[video]` extra), transformers' `Qwen3VLVideoProcessor` reproduced
+  bit for bit (frame sampling by the clip's real rate, the whole-clip pixel
+  budget, the frame pairs), and each pair's timestamp text, tokenized by the
+  engine's tokenizer. A `VideoInput` rides on `Vision.video`.
+- **`serving/image_prompt.py`**: one request's images and videos as the
+  forwards need them (a video is one run per frame pair, `Frames`): the expanded ids, the prefix-cache keys, the positions, the
   per-span embeddings and gemma-4's mask. Its docstring's "HOW A RUN MAY BE
   PREFILLED" is the one rule `Tower.bidirectional` decides: a causal run
   (Qwen3.5, Muse-Glimmer) may be cut by chunked prefill and restored
-  mid-run; a bidirectional one (gemma-4) never is.
+  mid-run; a bidirectional one (gemma-4) never is. `media_ends` is where the
+  context checkpoints take one per image and video.
+- **`serving/tower_cache.py`**: the tower's output per image and video in
+  host RAM, keyed by the digest of what the tower reads, LRU under
+  `--tower-cache-gib` ([tower output cache](serve.md#the-tower-output-cache)).
 - **`serving/mrope.py`**: Qwen3.5's M-RoPE positions for a prompt with
   images, a port of transformers' `get_rope_index`. A text request passes no
   `position_ids` at all.

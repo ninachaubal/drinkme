@@ -172,6 +172,7 @@ for the whole call.
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import json
 import os
@@ -340,13 +341,13 @@ class _Slot:
 
     __slots__ = ("n", "cache", "alloc", "ids", "stamp", "ckpts", "head")
 
-    def __init__(self, n: int = 0, ckpt_max: int = 0):
+    def __init__(self, n: int = 0, ckpt_max: int = 0, ckpt_media: int = 0):
         self.n = n  # its index, for the log lines
         self.cache = None
         self.alloc = 0
         self.ids: list[int] = []
         self.stamp = 0  # LRU clock reading of the last request that used it
-        self.ckpts = ctx_checkpoints.Checkpoints(ckpt_max)
+        self.ckpts = ctx_checkpoints.Checkpoints(ckpt_max, media_max=ckpt_media)
         self.head = None
 
     def clear(self) -> None:
@@ -640,8 +641,28 @@ class HFEngine:
                     self.vision = self._tower = None
                     self.vision_reason = check.reason
                     print(f"[drinkme] image input: off — {self.vision_reason}", flush=True)
+            if self.vision is not None and self.vision.video is not None:
+                pre = self.vision.video.preprocessor
+                print(f"[drinkme] video input: {pre.architecture}, {pre.fps:g} fps from the "
+                      f"clip's own frame rate, at most {pre.max_frames} frames "
+                      f"({pre.max_seconds:g} s), {pre.max_pixels:,} pixels per clip",
+                      flush=True)
+            elif self.vision is not None:
+                print(f"[drinkme] video input: off — {self.vision.video_reason}", flush=True)
         elif self.vision_reason != "text-only model":
             print(f"[drinkme] image input: off — {self.vision_reason}", flush=True)
+        # the tower's outputs in host RAM, by what the tower read
+        # (serving/tower_cache.py): an image or video seen before skips the
+        # tower in any conversation. None without a tower.
+        self._tower_cache = None
+        if self._tower is not None:
+            from . import tower_cache
+
+            dtype = next(self._tower.module(model).parameters()).dtype
+            self._tower_cache = tower_cache.TowerCache(
+                tower_cache.cap_from_env(),
+                identity=(model_id, arm, self._tower.architecture, self._tower.path, str(dtype)))
+            print(f"[drinkme] tower cache: {self._tower_cache.describe()}", flush=True)
         # The trained MTP draft head (serving/mtp.py), or None = the
         # one-token-at-a-time decode. Loaded once at engine build; per-request
         # gating (greedy and sampled both speculate) happens in
@@ -717,8 +738,14 @@ class HFEngine:
                     self._ckpt_off = "--ctx-checkpoints 0"
         self._ckpt_take = self._ckpt_max > 0 and ctx_checkpoints.needs_checkpoints(probe)
         del probe
+        # and how many of them may sit at the end of an image or a video
+        # (ctx_checkpoints.py, MEDIA ENDS): none for an engine that takes no
+        # checkpoints or reads no images
+        self._ckpt_media = (ctx_checkpoints.media_from_env()
+                            if self._ckpt_take and self.vision is not None else 0)
         # off (0 slots) keeps one slot object
-        self._slots = [_Slot(i, self._ckpt_max) for i in range(max(n_slots, 1))]
+        self._slots = [_Slot(i, self._ckpt_max, self._ckpt_media)
+                       for i in range(max(n_slots, 1))]
         self._slot_clock = 0  # monotonic; the LRU order is these stamps
         # what one slot costs, measured off the real cache tensors, and the
         # fit check that follows from it. Announced even at one slot: a
@@ -925,10 +952,16 @@ class HFEngine:
         tcfg = cfg.get_text_config() if hasattr(cfg, "get_text_config") else cfg
         return ctx_checkpoints.config_bytes(tcfg.to_dict(), self.dtype.itemsize, self.ctx)
 
+    def _new_checkpoints(self):
+        """An empty checkpoint list under this engine's rules: its
+        --ctx-checkpoints count and its media-end bound."""
+        return ctx_checkpoints.Checkpoints(self._ckpt_max, media_max=self._ckpt_media)
+
     def _announce_checkpoints(self) -> int:
         """Say what the context checkpoints do and cost; return the most one
         slot's checkpoints can hold, in bytes, for the residency check. They
-        live on the device beside their slot, so they are charged like it."""
+        live on the device beside their slot, so they are charged like it,
+        the media-end ones (ctx_checkpoints.py, MEDIA ENDS) included."""
         if not self._reuse:
             return 0
         if self._ckpt_off is not None:
@@ -940,10 +973,12 @@ class HFEngine:
                   "rewinds by length) — a slot is reused up to any shared prefix",
                   flush=True)
             return 0
-        held = ctx_checkpoints.max_held(self._ckpt_max, self.ctx)
+        held = ctx_checkpoints.max_held(self._ckpt_max, self.ctx, media=self._ckpt_media)
         one = self.checkpoint_bytes()
+        media = (f", {self._ckpt_media} at media ends ({ctx_checkpoints.MEDIA_ENV})"
+                 if self._ckpt_media else "")
         print(f"[drinkme] context checkpoints: up to {held} per slot (--ctx-checkpoints "
-              f"{self._ckpt_max}, {ctx_checkpoints.MIN_STEP} apart at ctx {self.ctx}) x "
+              f"{self._ckpt_max}, {ctx_checkpoints.MIN_STEP} apart at ctx {self.ctx}{media}) x "
               f"{one:,} B = {_human(held * one)} at most per slot", flush=True)
         return held * one
 
@@ -1059,7 +1094,7 @@ class HFEngine:
         if got is None:
             return floor
         cache, held = got
-        ckpts = ctx_checkpoints.Checkpoints(self._ckpt_max)
+        ckpts = self._new_checkpoints()
         if partial:
             ckpts.items = cks
             ckpts.free = ctx_checkpoints.rewinds_freely(cache)
@@ -1251,6 +1286,10 @@ class HFEngine:
             self._sleep_refs = []
             self.model = None
             self.mtp_head = None
+            # and the tower's outputs it kept in host RAM
+            # (serving/tower_cache.py); the wake's fresh engine brings its own
+            if self._tower_cache is not None:
+                self._tower_cache.clear()
             del refs
             gc.collect()
         sleep.release(self.device)
@@ -1299,6 +1338,7 @@ class HFEngine:
             self.device, self.dtype = fresh.device, fresh.dtype
             self.vision, self._tower, self.vision_reason = (
                 fresh.vision, fresh._tower, fresh.vision_reason)
+            self._tower_cache = fresh._tower_cache
         self._wake_prime()
         st.slots_restored = self._restore_slots()
         st.level, st.since = 0, None
@@ -1354,7 +1394,7 @@ class HFEngine:
             slot = self._slots[idx]
             slot.cache, slot.alloc, slot.ids = cache, entry.alloc, list(held)
             # the slot's context checkpoints were parked with it
-            slot.ckpts = ctx_checkpoints.Checkpoints(self._ckpt_max)
+            slot.ckpts = self._new_checkpoints()
             if self._ckpt_max > 0:
                 slot.ckpts.items = self._cold.restore_checkpoints(entry, cache, self.device)
                 slot.ckpts.free = ctx_checkpoints.rewinds_freely(cache)
@@ -1450,26 +1490,34 @@ class HFEngine:
         device — lockless by design. Each image's one rendered placeholder
         counts as what it expands to (image_prompt.ImagePrompt: its `tokens`,
         and gemma-4's two markers around them; vision.Vision.prompt_tokens),
-        so an ImagePlan (vision.Vision.count) counts the same as the image."""
+        so an ImagePlan (vision.Vision.count) counts the same as the image.
+        A video's three rendered ids count as its timestamps, markers and
+        runs (video.PreparedVideo.prompt_tokens)."""
         n = len(self._render(req).ids)
-        if not req.images:
+        if not req.images and not req.videos:
             return n
         if self.vision is None:  # generate() refuses these; the count is the placeholders'
-            return n + sum(img.tokens - 1 for img in req.images)
-        return n + self.vision.expansion(req.images)
+            return (n + sum(img.tokens - 1 for img in req.images)
+                    + sum(v.expansion for v in req.videos))
+        return n + self.vision.expansion(req.images, req.videos)
 
     def _image_prompt(self, req: GenerationRequest, ids: list[int]):
-        """The request's ImagePrompt, or None for a text request. Images on
-        an engine that cannot read them are refused here too, by the same
-        reason the dialects give, in case a caller skipped their check."""
-        if not req.images:
+        """The request's ImagePrompt, or None for a text request. Images or
+        videos on an engine that cannot read them are refused here too, by
+        the same reason the dialects give, in case a caller skipped their
+        check."""
+        if not req.images and not req.videos:
             return None
         if self.vision is None:
             raise ValueError(f"{self.model_id} cannot read images on this server "
                              f"({self.vision_reason})")
+        if req.videos and self.vision.video is None:
+            raise ValueError(f"{self.model_id} cannot read video on this server "
+                             f"({self.vision.video_reason})")
         from .image_prompt import ImagePrompt
 
-        return ImagePrompt(ids, req.images, self._tower, self.model)
+        return ImagePrompt(ids, req.images, self._tower, self.model, videos=req.videos,
+                           cache=self._tower_cache)
 
     def tokenize(self, prompt: str | None = None, messages: list[dict] | None = None,
                  tools: list | None = None,
@@ -1727,7 +1775,7 @@ class HFEngine:
                 # the slot's checkpoints are detached while this request
                 # mutates the cache, as slot.ids is emptied below: an
                 # exception leaves the slot with neither
-                ckpts, slot.ckpts = slot.ckpts, ctx_checkpoints.Checkpoints(self._ckpt_max)
+                ckpts, slot.ckpts = slot.ckpts, self._new_checkpoints()
                 # and so is the MTP head's KV it kept (mtp.HeadKV), cropped
                 # below once the reuse point is settled
                 head_kv, slot.head = slot.head, None
@@ -1797,21 +1845,28 @@ class HFEngine:
             # everything before it. When the rings will still hold every
             # position after the prefill (ctx_checkpoints.ring_holds), the
             # prefill is not split: all of them are copied out of the rings
-            # once it ends at n_prompt
+            # once it ends at n_prompt. A prompt with images or videos takes
+            # one more at each media item's end, where a new question about
+            # the same media parts from it (MEDIA ENDS); a text prompt's
+            # stops are the ones it always took
             at = {}
             if ckpts is not None and self._ckpt_take:
                 stops = ctx_checkpoints.positions(
                     n_prompt, lcp, () if image is None else image.whole(lcp, chunk),
                     user=self._last_user_start(req, prompt.ids, image))
+                media = set() if image is None else set(ctx_checkpoints.media_positions(
+                    image.media_ends(), lcp, n_prompt, self._ckpt_media))
+                stops = sorted(set(stops) | media)
                 if ctx_checkpoints.ring_holds(cache, n_prompt):
                     def take(_end, task=slot.stamp, stops=stops):
                         for p in stops:
-                            ckpts.add(ctx_checkpoints.snapshot(cache, task, at=p))
+                            ckpts.add(ctx_checkpoints.snapshot(cache, task, at=p,
+                                                               media=p in media))
 
                     at = {"stops": (n_prompt,), "at_stop": take}
                 else:
                     def take(p, task=slot.stamp):
-                        ckpts.add(ctx_checkpoints.snapshot(cache, task))
+                        ckpts.add(ctx_checkpoints.snapshot(cache, task, media=p in media))
 
                     at = {"stops": stops, "at_stop": take}
             if spec is None:
@@ -2201,7 +2256,11 @@ def _vision_for(cfg, snap: str, repo: str, tokenizer=None):
                             f"use_bidirectional_attention={text.use_bidirectional_attention!r}")
     if not vision.enabled_from_env():
         return None, None, f"disabled by {vision.VISION_ENV}=0"
-    vis = vision.load(mt, snap)
+
+    def encode(text: str) -> list[int]:  # a video's timestamps (serving/video.py)
+        return tokenizer().encode(text, add_special_tokens=False)
+
+    vis = vision.load(mt, snap, encode=encode if tokenizer else None)
     if vis is None:
         return None, None, "the checkpoint carries no image processor config"
     pre = vis.preprocessor
@@ -2228,6 +2287,21 @@ def _vision_for(cfg, snap: str, repo: str, tokenizer=None):
     if pre.wrap != (tower.boi is not None) + (tower.eoi is not None):
         raise ValueError(f"{repo}: the {mt} preprocessor counts {pre.wrap} marker tokens per "
                          "image, the tower inserts a different number")
+    if vis.video is not None:
+        vpre = vis.video.preprocessor
+        if tower.video_token_id is None:
+            vis = dataclasses.replace(vis, video=None, video_reason=(
+                "the checkpoint's config names no video_token_id, vision_start_token_id "
+                "and vision_end_token_id"))
+        else:
+            for mine, theirs in (("patch_size", "patch_size"),
+                                 ("merge_size", "spatial_merge_size"),
+                                 ("temporal_patch_size", "temporal_patch_size")):
+                a, b = getattr(vpre, mine), getattr(vc, theirs, None)
+                if b is not None and a != b:
+                    raise ValueError(f"{repo}: the video processor config says {mine}={a}, "
+                                     f"the vision tower's config {theirs}={b}; refusing to "
+                                     "serve video cut for one into the other")
     return vis, tower, None
 
 

@@ -7,6 +7,24 @@ release of one major version.
 
 ## Unreleased
 
+## 1.1.0 — 2026-10-04
+
+### Added
+
+- Video input: `drinkme serve` accepts `video_url` parts (vLLM's shape) on
+  Chat Completions for models whose processor reads video, today the Qwen3.5
+  architecture (Qwen3.8-27B, MiMo-V2.6-Distill-Qwen-9B). MP4 and WebM are
+  decoded with PyAV, sampled and resized as transformers' Qwen3-VL video
+  processor does (checked against it), with a timestamp for every pair of
+  frames. Install the `video` extra (`drinkme[video]`); without it a video
+  request is refused with that instruction. See
+  [video input](docs/serve.md#video-input).
+- Context checkpoints at the end of each image or video
+  (`DRINKME_MEDIA_CHECKPOINTS`, default 2), so a new question about media
+  already in the conversation reuses the prefill through it.
+- A vision tower output cache (`--tower-cache-gib`, default 0.5): an image or
+  video sent again skips the tower, in any conversation.
+
 ## 1.0.1 — 2026-10-04
 
 ### Added

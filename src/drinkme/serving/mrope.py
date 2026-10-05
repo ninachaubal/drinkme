@@ -16,6 +16,10 @@ tests/test_serving_mrope.py:
   0, and each image adds `max(h', w') - h'*w'` (h', w' merged). A
   2x3-merged image adds -3.
 - `<|vision_start|>` and `<|vision_end|>` are ordinary text tokens.
+- A video's temporal groups are runs of their own, each over a grid of one
+  frame: the reference splits a video's (t, h, w) into t grids of
+  (1, h, w), because a timestamp's text separates every two groups
+  (serving/video.py). The caller passes each group's grid.
 
 The text model takes four rows (`Qwen3_5TextModel.forward`): row 0 the
 plain sequential position (mask building, and what the decoder layers get
@@ -54,15 +58,17 @@ def image_token_count(grid_thw: Sequence[int], merge_size: int = 2) -> int:
     return t * (h // merge_size) * (w // merge_size)
 
 
-def rope_positions(ids: Sequence[int], grids: Sequence[Sequence[int]], image_token_id: int,
+def rope_positions(ids: Sequence[int], grids: Sequence[Sequence[int]],
+                   image_token_id: int | Sequence[int],
                    merge_size: int = 2) -> tuple[np.ndarray, int]:
     """(pos4, delta) for an expanded prompt.
 
     `ids` is the prompt as the model sees it, each image's placeholder
     already expanded to `image_token_count(grid)` copies of
-    `image_token_id`. `grids` holds one (t, h, w) per image in prompt
-    order: PreparedImage.grid_thw. Returns pos4 as int64 [4, len(ids)]
-    and delta as a Python int.
+    `image_token_id` (or of any one of several ids, an image's and a
+    video's). `grids` holds one (t, h, w) per run in prompt order:
+    PreparedImage.grid_thw, and (1, h, w) per temporal group of a video.
+    Returns pos4 as int64 [4, len(ids)] and delta as a Python int.
 
     Image runs are cut by count, not by adjacency: image k owns the next
     `image_token_count(grids[k])` placeholder ids from wherever its run
@@ -75,7 +81,7 @@ def rope_positions(ids: Sequence[int], grids: Sequence[Sequence[int]], image_tok
     n = ids.shape[0]
     pos = np.empty((4, n), dtype=np.int64)
     pos[0] = np.arange(n)
-    is_img = ids == image_token_id
+    is_img = np.isin(ids, np.asarray(image_token_id, dtype=np.int64).reshape(-1))
     img_at = np.flatnonzero(is_img)
     i = cur = used = 0  # next id to place, next rope position, placeholders consumed
     for k, grid in enumerate(grids):

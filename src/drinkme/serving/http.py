@@ -117,6 +117,14 @@ filtering (this server runs at the operator's own network position, as
 llama.cpp's does); `--no-image-urls` / DRINKME_IMAGE_URLS=0 turns fetching off for
 an operator who exposes the server to other machines.
 
+Video (serving/video.py) rides on the same surface: `video_url` parts
+(vLLM's shape, Chat Completions only — the Responses and Messages APIs
+define no video part) follow the image sources' rules and switches, decode
+outside the lock into GenerationRequest.videos, and are refused by name —
+capability.video_refusal_message — on an engine whose Vision has no
+`.video` (no video processor, PyAV missing) or that has no vision at all.
+`drinkme.capabilities.video` and `.videoInput` ride beside `vision`.
+
 Advertised context (borrowed from oMLX): `advertised_ctx`, off by default
 (None = the default, real numbers everywhere). When set below the
 engine's real `contextWindow`, `/v1/messages`' `usage.input_tokens` and
@@ -191,6 +199,7 @@ from . import messages as anthropic
 from . import metrics
 from . import generation_profiles
 from . import responses
+from . import video
 from . import vision
 from .engine import (Delta, Engine, Finished, GenerationRequest, SampleParamError, SleepError,
                      StreamStart, validated_sample_params)
@@ -435,9 +444,10 @@ def _truncate(s: str, limit: int = 300) -> str:
 # OpenAI content-part types this server does not serve, named so the 400
 # says what was sent: the request is refused, never answered with the
 # attachment quietly dropped.
-# image_url is handled separately below: whether it is refused depends on
-# the engine's vision capability, not a fixed list.
-_UNSUPPORTED_PART_TYPES = ("input_audio", "file", "video_url")
+# image_url and video_url are handled separately below: whether they are
+# refused depends on the engine's vision (and video) capability, not a
+# fixed list.
+_UNSUPPORTED_PART_TYPES = ("input_audio", "file")
 
 
 def _unsupported_part_message(where: str, t: str) -> str:
@@ -449,7 +459,9 @@ def _validate_content_parts(i: int, content: list, *, role, eng: Engine) -> str 
     None: every part is an object with a string `type`; a `text` part
     carries a string `text`; an `image_url` part is refused by the
     model's vision capability (capability.engine_vision) when there is
-    none, by role when the turn is a system message, or by shape otherwise; a part
+    none, by role when the turn is a system message, or by shape otherwise;
+    a `video_url` part the same way by the video capability
+    (capability.video_reason); a part
     of another modality is refused by name; an unknown type is refused as
     unknown. Runs BEFORE _content_text flattens, so nothing is discarded
     on the way to a 200."""
@@ -474,6 +486,15 @@ def _validate_content_parts(i: int, content: list, *, role, eng: Engine) -> str 
             detail = iu.get("detail")
             if detail is not None and not isinstance(detail, str):
                 return f"{where}.image_url.detail must be a string."
+        elif t == "video_url":
+            if veng is None or getattr(veng, "video", None) is None:
+                return capability.video_refusal_message(
+                    where, eng.model_id, capability.video_reason(eng), images=veng is not None)
+            if role == "system":
+                return f"{where}: videos are not supported in a system message."
+            vu = part.get("video_url")
+            if not isinstance(vu, dict) or not isinstance(vu.get("url"), str):
+                return f"{where}.video_url.url must be a string."
         elif t in _UNSUPPORTED_PART_TYPES:
             return _unsupported_part_message(where, t)
         else:
@@ -503,28 +524,36 @@ def _content_text(content) -> str:
 
 
 def _has_image_part(content) -> bool:
+    """Does the parts list carry an image or a video?"""
     return isinstance(content, list) and any(
-        isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+        isinstance(p, dict) and p.get("type") in ("image_url", "video_url") for p in content)
 
 
-def _extract_image_parts(i: int, content: list, veng: "vision.Vision") -> tuple[list, list]:
+def _extract_image_parts(i: int, content: list,
+                         veng: "vision.Vision") -> tuple[list, list, list]:
     """A content-parts array already shape-validated by
-    _validate_content_parts (so `veng` is known non-None and every
-    `image_url` part's shape is sound) -> (parts in wire order, the
-    PreparedImages decoded from it). Text parts run through the injection
-    guard here; `_content_text` never sees an image-bearing turn. Every
+    _validate_content_parts (so `veng` is known non-None, its `.video` too
+    when a `video_url` is present, and every media part's shape is sound)
+    -> (parts in wire order, the PreparedImages and the PreparedVideos
+    decoded from it). Text parts run through the injection guard here;
+    `_content_text` never sees an image- or video-bearing turn. Every
     `image_url`'s DOWNLOAD (http(s) URLs, per veng.fetch_urls/media_path)
     is batched through vision.parse_image_urls, so several images in one
-    turn fetch concurrently; decoding (CPU-bound) then runs per image, in
-    wire order, same as always."""
+    turn fetch concurrently, and every `video_url`'s through
+    video.parse_video_urls; decoding (CPU-bound) then runs per image and
+    per video, in wire order, same as always."""
     parts: list[dict] = []
     pending: list[tuple[int, str, str, object]] = []  # (parts-index, url, where, detail)
+    pending_v: list[tuple[str, str]] = []  # (url, where)
     for j, p in enumerate(content):
         where = f"messages[{i}].content[{j}]"
         if p["type"] == "text":
             text = p["text"]
             capability.check_injection(text, veng, where)
             parts.append({"type": "text", "text": text})
+        elif p["type"] == "video_url":
+            parts.append({"type": "video"})
+            pending_v.append((p["video_url"]["url"], where))
         else:  # image_url
             iu = p["image_url"]
             parts.append({"type": "image"})
@@ -533,35 +562,46 @@ def _extract_image_parts(i: int, content: list, veng: "vision.Vision") -> tuple[
                                    fetch_urls=veng.fetch_urls, media_path=veng.media_path)
     images = [veng.prepare(enc, detail=detail, where=where)
              for (_, _, where, detail), enc in zip(pending, encs)]
-    return parts, images
+    videos = []
+    if pending_v:
+        vencs = video.parse_video_urls(pending_v, fetch_urls=veng.fetch_urls,
+                                       media_path=veng.media_path)
+        videos = [veng.video.prepare(enc, where=where)
+                  for (_, where), enc in zip(pending_v, vencs)]
+    return parts, images, videos
 
 
-def _normalize_messages(messages: list, *, eng: Engine | None = None) -> tuple[list, tuple]:
+def _normalize_messages(messages: list, *,
+                        eng: Engine | None = None) -> tuple[list, tuple, tuple]:
     """The wire-shape fixes every /v1/chat/completions request gets before
     it reaches a template (do_POST's boundary comments carry the full
     reasoning for each): content flattened to plain text (parts arrays,
-    null) or, for a turn carrying images, kept as a parts list in wire
-    order with each image_url part decoded and replaced by
-    `{"type": "image"}` (engine.GenerationRequest's docstring); history
+    null) or, for a turn carrying images or videos, kept as a parts list
+    in wire order with each image_url part decoded and replaced by
+    `{"type": "image"}` and each video_url part by `{"type": "video"}`
+    (engine.GenerationRequest's docstring); history
     tool_calls.arguments parsed JSON-string -> dict; and OpenAI's
     "developer" role folded to "system". /tokenize (one of the tokenizer
     routes) applies the SAME fixes for the SAME reason count_tokens must
     never drift from what generate() would actually see for one
-    conversation. Returns (messages, images) — images in template order,
-    empty when the request carries none. Raises vision.ImageError for an
-    image that fails to decode (fetch-off, bad format, oversize, ...) and
-    for the injection guard; callers give it the ImageError's own `code`."""
+    conversation. Returns (messages, images, videos) — each in template
+    order, empty when the request carries none. Raises vision.ImageError
+    (video.VideoError for a video) for media that fails to decode
+    (fetch-off, bad format, oversize, ...) and for the injection guard;
+    callers give it the error's own `code`."""
     veng = capability.engine_vision(eng) if eng is not None else None
     out = []
     images: list = []
+    videos: list = []
     for i, m in enumerate(messages):
         if not isinstance(m, dict):
             out.append(m)
             continue
         content = m.get("content")
         if _has_image_part(content):
-            parts, imgs = _extract_image_parts(i, content, veng)
+            parts, imgs, vids = _extract_image_parts(i, content, veng)
             images.extend(imgs)
+            videos.extend(vids)
             m = dict(m, content=parts)
         else:
             text = _content_text(content)
@@ -576,15 +616,15 @@ def _normalize_messages(messages: list, *, eng: Engine | None = None) -> tuple[l
         out.append(m)
     out = [dict(m, role="system") if isinstance(m, dict) and m.get("role") == "developer"
            else m for m in out]
-    return out, tuple(images)
+    return out, tuple(images), tuple(videos)
 
 
 def _validate_chat_messages(messages: list, *, eng: Engine) -> str | None:
     """None if every message is shape-safe for _normalize_messages/generate;
     else the 400 message naming the first bad one — the message, its
     content, and (a parts array) every part: _validate_content_parts. Also
-    refuses a request over MAX_IMAGES images (vision.check_image_count),
-    before any of them decode. messages.py's Anthropic parser and
+    refuses a request over MAX_IMAGES images (vision.check_image_count) or
+    MAX_VIDEOS videos (video.check_video_count), before any of them decode. messages.py's Anthropic parser and
     responses.py's input parser already check this on the way in; this
     dialect once trusted the shape, and `messages: [5]` and `content: {}`
     probes went straight through to a bare AttributeError deep in
@@ -592,7 +632,7 @@ def _validate_chat_messages(messages: list, *, eng: Engine) -> str | None:
     access) or a silently-emptied turn, and
     `text: 7` dropped the connection while an
     image-only turn was answered 200 with the image discarded."""
-    n_images = 0
+    n_images = n_videos = 0
     for i, m in enumerate(messages):
         if not isinstance(m, dict):
             return f"messages[{i}] must be an object."
@@ -606,11 +646,15 @@ def _validate_chat_messages(messages: list, *, eng: Engine) -> str | None:
                 return bad
             n_images += sum(1 for p in content
                             if isinstance(p, dict) and p.get("type") == "image_url")
-    if n_images:
-        try:
+            n_videos += sum(1 for p in content
+                            if isinstance(p, dict) and p.get("type") == "video_url")
+    try:
+        if n_images:
             vision.check_image_count(n_images, where="messages")
-        except vision.ImageError as e:
-            return str(e)
+        if n_videos:
+            video.check_video_count(n_videos, where="messages")
+    except vision.ImageError as e:
+        return str(e)
     return None
 
 
@@ -1001,8 +1045,10 @@ class _Handler(BaseHTTPRequestHandler):
             meta = eng.model_meta()
             # vLLM-shaped route, so snake_case (docs/serve.md#get-v1models)
             caps = meta["capabilities"]
+            veng = capability.engine_vision(eng)
             snake = {"thinking": caps.get("thinking"), "tool_format": caps.get("toolFormat"),
-                     "vision": capability.engine_vision(eng) is not None}
+                     "vision": veng is not None,
+                     "video": veng is not None and getattr(veng, "video", None) is not None}
             if "thinkingSwitch" in caps:
                 snake["thinking_switch"] = caps["thinkingSwitch"]
             return self._json(200, {**eng.tokenizer_info(), **snake,
@@ -1034,16 +1080,21 @@ class _Handler(BaseHTTPRequestHandler):
         thinking/toolFormat — true|false, from the engine's OPTIONAL
         `.vision` surface (capability.engine_vision), not
         serving/capability.py's template probe — plus `imageInput` (max
-        pixels, formats, sources) when it is true."""
+        pixels, formats, sources) when it is true; `capabilities.video`
+        likewise, with `videoInput` (capability.video_input_block) when
+        true."""
         meta = eng.model_meta()
         if generation_profile is not None:
             mid = f"{mid}:{generation_profile}"
             meta = dict(meta, sampling={"profile": generation_profile,
                                         "defaults": self._effective_defaults(eng, generation_profile)})
         veng = capability.engine_vision(eng)
-        caps = dict(meta.get("capabilities") or {}, vision=veng is not None)
+        has_video = veng is not None and getattr(veng, "video", None) is not None
+        caps = dict(meta.get("capabilities") or {}, vision=veng is not None, video=has_video)
         if veng is not None:
             caps["imageInput"] = capability.image_input_block(veng)
+        if has_video:
+            caps["videoInput"] = capability.video_input_block(veng)
         meta = dict(meta, capabilities=caps)
         return {"id": mid, "object": "model", "created": self.server.started,
                 "owned_by": "drinkme", "drinkme": meta}
@@ -1112,7 +1163,7 @@ class _Handler(BaseHTTPRequestHandler):
         # decode (one of vision.ImageError's named codes), is still a JSON
         # 400 naming the part, never a traceback that drops the connection.
         try:
-            messages, images = _normalize_messages(messages, eng=eng)
+            messages, images, videos = _normalize_messages(messages, eng=eng)
         except vision.ImageError as e:
             return self._error(400, str(e), "invalid_request_error", e.code)
         except Exception as e:  # noqa: BLE001 — see above
@@ -1306,7 +1357,8 @@ class _Handler(BaseHTTPRequestHandler):
         # everything resolved above, built once, frozen
         greq = GenerationRequest(messages, params, tools=tools, template_kwargs=tkw,
                                  stream=bool(stream),
-                                 request_id=f"chatcmpl-{uuid.uuid4().hex}", images=images)
+                                 request_id=f"chatcmpl-{uuid.uuid4().hex}", images=images,
+                                 videos=videos)
         try:
             if greq.stream:
                 self._chat_stream(eng, greq)
@@ -1432,7 +1484,7 @@ class _Handler(BaseHTTPRequestHandler):
         can never be two different opinions about one conversation.
 
         Image expansion: Engine.tokenize()'s signature
-        carries no images (only prompt/messages/tools), so it renders the
+        carries no images or videos (only prompt/messages/tools), so it renders the
         template with ONE placeholder per image and tokenizes that — the
         header-only, no-ViT count. This route corrects it: each image's
         prompt tokens (Vision.prompt_tokens: `PreparedImage.tokens`, from
@@ -1442,7 +1494,8 @@ class _Handler(BaseHTTPRequestHandler):
         actually consume, the same arithmetic a vision-aware
         Engine.count_tokens(req) applies internally where it has `req.images`
         to work with (GenerationRequest, not this route's bare prompt/
-        messages)."""
+        messages). A video's three rendered ids are corrected the same way,
+        by its video.PreparedVideo.expansion (timestamps, markers, runs)."""
         if not self._authed():  # headers only — no body byte read before the gate
             return
         raw = self._body_or_413()
@@ -1465,6 +1518,7 @@ class _Handler(BaseHTTPRequestHandler):
                                "invalid_request_error", None)
         eng = self.server.engine
         images: tuple = ()
+        videos: tuple = ()
         if messages is not None:
             if not isinstance(messages, list) or not messages:
                 return self._error(400, "'messages' must be a non-empty array.",
@@ -1473,7 +1527,7 @@ class _Handler(BaseHTTPRequestHandler):
             if bad_msg:
                 return self._error(400, bad_msg, "invalid_request_error", None)
             try:
-                messages, images = _normalize_messages(messages, eng=eng)
+                messages, images, videos = _normalize_messages(messages, eng=eng)
             except vision.ImageError as e:
                 return self._error(400, str(e), "invalid_request_error", e.code)
             except Exception as e:  # noqa: BLE001 — a JSON 400, never a dropped connection
@@ -1492,7 +1546,7 @@ class _Handler(BaseHTTPRequestHandler):
             etype = "invalid_request_error" if status == 400 else "server_error"
             return self._error(status, f"{type(e).__name__}: {e}", etype, None)
         veng = capability.engine_vision(eng)
-        count = len(tokens) + (veng.expansion(images) if veng is not None else
+        count = len(tokens) + (veng.expansion(images, videos) if veng is not None else
                                sum(img.tokens - 1 for img in images))
         self._json(200, {"count": count, "tokens": tokens,
                          "max_model_len": eng.model_meta().get("contextWindow")})

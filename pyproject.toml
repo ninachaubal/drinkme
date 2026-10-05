@@ -1,7 +1,7 @@
 # drinkme — the bottle labeled DRINK ME: smaller, every segment still there, lossless.
 [project]
 name = "drinkme"
-version = "1.0.1"
+version = "1.1.0"
 description = "Lossless weight compression that makes local inference faster"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,6 +41,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "jsonschema>=4"]  # jsonschema: the reference validator tests/test_serving_constrain.py uses as its oracle
+# Video input (serving/video.py): PyAV decodes the MP4/WebM a `video_url`
+# part carries, with FFmpeg built into its wheels (no system FFmpeg, no
+# torch coupling). Optional: without it `drinkme serve` refuses video by
+# name and says to install this extra. The floor is the oldest PyAV with
+# wheels for every Python drinkme supports (16.x: 3.10+); the video tests
+# pass on 16.0.1 and 19.0.1 (2026-10-04).
+video = ["av>=16"]
 
 [project.scripts]
 drinkme = "drinkme.cli:entry"

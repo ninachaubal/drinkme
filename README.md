@@ -4,7 +4,8 @@ drinkme is a local LLM server that keeps model weights losslessly compressed
 in memory and decodes them during inference. Packed BF16 weights retain every
 bit of the original checkpoint. The server supports OpenAI Chat Completions,
 Responses, and Anthropic Messages APIs, with [image input](docs/serve.md#image-input)
-on models that have a vision tower. Use it to run a BF16 model that would
+on models that have a vision tower, and [video input](docs/serve.md#video-input) on
+the Qwen3.5 ones. Use it to run a BF16 model that would
 not otherwise fit in memory, without quantizing it.
 
 Measured on Qwen3-8B and Qwen3.8-27B, BF16 weights take about 27% less memory

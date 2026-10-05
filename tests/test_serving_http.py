@@ -123,21 +123,28 @@ def data_url(data: bytes, mt: str = "image/png") -> str:
 class VisionEngine(FakeEngine):
     """A FakeEngine with a real Vision attached (engine.vision, the OPTIONAL
     surface capability.engine_vision reads) whose count_tokens/tokenize/
-    generate are image-aware, so the dialect tests can check the accept
-    path and the token-count arithmetic without a real model."""
+    generate are image- and video-aware, so the dialect tests can check
+    the accept path and the token-count arithmetic without a real model.
+    A video part counts as its PreparedVideo.prompt_tokens, and the
+    tokenize below renders it as one word, so /tokenize's correction
+    (expansion = prompt_tokens - 3) is checked against a 3-word stand-in."""
 
     def __init__(self, *a, veng=None, **kw):
         super().__init__(*a, **kw)
         self.vision = veng if veng is not None else vision_engine()
 
     def count_tokens(self, req):
-        n, it = 0, iter(req.images)
+        n, it, vit = 0, iter(req.images), iter(req.videos)
         for m in req.messages:
             c = m.get("content", "")
             if isinstance(c, list):
                 for p in c:
-                    n += next(it).tokens if p.get("type") == "image" else len(
-                        p.get("text", "").split())
+                    if p.get("type") == "image":
+                        n += next(it).tokens
+                    elif p.get("type") == "video":
+                        n += next(vit).prompt_tokens
+                    else:
+                        n += len(p.get("text", "").split())
             else:
                 n += len(str(c).split())
         return n
@@ -153,6 +160,8 @@ class VisionEngine(FakeEngine):
                     for p in c:
                         if p.get("type") == "image":
                             words.append("<image>")
+                        elif p.get("type") == "video":
+                            words.extend(["<vs>", "<video>", "<ve>"])
                         else:
                             words.extend(p.get("text", "").split())
                 else:
@@ -192,10 +201,11 @@ def test_models_shape(fake):
     assert "meanBpw" not in d  # the lexicon's names on the wire
     assert "compressionProfile" in d and "sourceDtype" in d and "contextWindow" in d
     assert set(d["sampling"]) == {"profile", "defaults"} and d["sampling"]["profile"] is None
-    # vision is always present; imageInput only when true —
-    # FakeEngine has no .vision by default, so it is false with no imageInput here
-    assert set(d["capabilities"]) == {"thinking", "toolFormat", "thinkingSwitch", "vision"}
-    assert d["capabilities"]["vision"] is False
+    # vision and video are always present; imageInput/videoInput only when
+    # true — FakeEngine has no .vision by default, so both are false here
+    assert set(d["capabilities"]) == {"thinking", "toolFormat", "thinkingSwitch", "vision",
+                                      "video"}
+    assert d["capabilities"]["vision"] is False and d["capabilities"]["video"] is False
 
 
 def test_models_carries_the_capability_announcement(fake):
@@ -205,12 +215,12 @@ def test_models_carries_the_capability_announcement(fake):
     _, port = fake()
     (m,) = json.loads(get(port, "/v1/models")[1])["data"]
     assert m["drinkme"]["capabilities"] == {
-        "thinking": "open", "toolFormat": "json", "vision": False,
+        "thinking": "open", "toolFormat": "json", "vision": False, "video": False,
         "thinkingSwitch": "chat_template_kwargs.enable_thinking"}
     _, port2 = fake(thinking="closed", tool_format="unknown")
     (m2,) = json.loads(get(port2, "/v1/models")[1])["data"]
     assert m2["drinkme"]["capabilities"] == {
-        "thinking": "closed", "toolFormat": "unknown", "vision": False,
+        "thinking": "closed", "toolFormat": "unknown", "vision": False, "video": False,
         "thinkingSwitch": "chat_template_kwargs.enable_thinking"}
 
 

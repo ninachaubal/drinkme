@@ -4,8 +4,8 @@ The server loads lossless BF16 packs. It rejects FP8 checkpoints with
 `FP8 checkpoints are not supported in this release (bf16 only)`.
 `/v1/models` reports `sourceDtype`, device, capabilities, and context window
 under one `drinkme` object (below).
-See the [CLI reference](cli.md) for options, [image input](#image-input) for
-the models that read images, [sleep/wake](serve-sleep.md) for memory release,
+See the [CLI reference](cli.md) for options, [image input](#image-input) and
+[video input](#video-input) for the models that read them, [sleep/wake](serve-sleep.md) for memory release,
 and [Metal](metal.md) for the MLX runtime's restrictions.
 [Serving kernels](serve-kernels.md) covers the attention paths and kernel
 choices behind the boot log's `[drinkme]` lines.
@@ -88,7 +88,8 @@ fields that are ignored. Rejected features return HTTP 400 with the field name.
 | Forced tool use (`required`, a named function; Anthropic `any` / `tool`) | refused (`unsupported_tool_choice`); constrained decoding for forced calls is not implemented | refused | refused |
 | Several calls in one turn | when the model emits them (`tool_calls[]`); `parallel_tool_calls` is not read | when the model emits them; `parallel_tool_calls` accepted and echoed, not enforced | when the model emits them |
 | Images ([image input](#image-input)), on a vision model; refused by name otherwise | `image_url` parts in any turn but a system one (data URL, http(s) URL, `file://`), `detail` | `input_image` parts in user turns (`image_url`, `detail`); `file_id` refused | `image` blocks (`base64` or `url` source) in user turns and inside `tool_result`; a `file` source is refused |
-| Audio, video, files | refused by part type (`input_audio`, `file`, `video_url`) | refused (`input_file`, `input_audio`) | refused (`document`) |
+| Video ([video input](#video-input)), on a Qwen3.5 model with the `drinkme[video]` extra; refused by name otherwise | `video_url` parts in any turn but a system one (data URL, http(s) URL, `file://`) | — (no video part in the API) | — (no video part in the API) |
+| Audio, files | refused by part type (`input_audio`, `file`) | refused (`input_file`, `input_audio`) | refused (`document`) |
 | JSON schema output | `response_format` `json_object` / `json_schema` (grammar-constrained by `serving/constrain.py`, which rejects unsupported schema keywords); not combinable with tools; forces thinking off | `text.format`, the same path | `output_config.format` `json_schema`, the same path |
 | Thinking | `reasoning_effort`, `chat_template_kwargs.enable_thinking`; leaves as `reasoning_content` | `reasoning.effort`, `chat_template_kwargs.enable_thinking`; leaves as a `reasoning` item | `thinking` enabled / adaptive / disabled, `output_config.effort` (`budget_tokens` recorded, not enforced); leaves as a `thinking` block |
 | Token limit | `max_tokens` or `max_completion_tokens` (positive integer; a supplied `0` / `false` is refused) | `max_output_tokens` | `max_tokens` (required) |
@@ -234,8 +235,17 @@ conversation about a 2560x1440 screenshot reused 3,702 of 3,728 prompt
 tokens and reached its first token in 1.24 s, against 12.9 s cold.
 
 A history that the chat template renders differently from what the model
-wrote does not extend the slot, and every image in it runs the tower again
-([prefix cache](serve-prefix-slots.md)).
+wrote does not extend the slot. The slot is then reused up to a context
+checkpoint at or below the point where the prompt parts from it
+([prefix cache](serve-prefix-slots.md)). The engine takes one at the end of
+each image and video, past its closing marker, for the last two in a
+prompt (`DRINKME_MEDIA_CHECKPOINTS`). So a new question after the same image
+or video, in a request of its own, reuses everything through the media and
+the tower does not run. Without that checkpoint, a follow-up about a
+2,782-token clip on Qwen3.8-27B restored to token 2,062, mid-video, and ran
+the tower again. An image or video outside the reused prefix comes from
+the [tower output cache](#the-tower-output-cache) when the tower has read it
+before.
 
 How an image's tokens may be prefilled depends on how the text model attends
 among them. On Qwen3.5 and Muse-Glimmer they are causal like text: chunked
@@ -248,6 +258,28 @@ that ends inside an image is not reused: the log says `the reusable prefix
 
 N-gram speculation never proposes an image position, and text that exists
 only as pixels gives it nothing to copy.
+
+### The tower output cache
+
+The engine keeps what the vision tower made of each image and video in host
+RAM ([`serving/tower_cache.py`](../src/drinkme/serving/tower_cache.py)). A
+request that carries the same image or video again copies those rows back
+instead of running the tower, even when it shares no prefix with any slot:
+another conversation, another system prompt, the media at another position.
+The key is a digest of the exact tensor the tower reads (the pixels after
+resizing and normalizing, the frames sampled, the grid), plus the model,
+the arm and the tower. Any change to what the tower would see is a
+different key. A hit is the tower's own output, copied byte for byte, so the
+answer is the one a miss gives. The video is still decoded on every request;
+only the tower's forward pass is skipped.
+
+`--tower-cache-gib GIB` (`DRINKME_TOWER_CACHE_GIB`) sets the cap, default
+0.5 GiB, least recently used out first; `0` turns the cache off. An entry is
+the tower's rows at the model's dtype. On Qwen3.8-27B that is 10,240 B per
+token: 36.9 MB for a 3,600-token image, 27 MB for a 2,640-token clip, 126 MB
+for a video at the 12,288-token budget. The default holds 14, 19 or 4 of
+them. On a unified-memory machine host RAM is memory the model cannot have,
+so the default is kept small. A level-2 sleep empties the cache.
 
 ### Boot lines and the self-test
 
@@ -263,12 +295,22 @@ own head width and compares it with an fp32 reference (gemma-4 runs its
 masked form too). A kernel that disagrees prints a
 `Vision tower attention self-test failed — image input refused.` block: the
 server keeps serving text and refuses every image, naming the check. A
-level-2 wake rebuilds the engine and checks again. Each request with images
-logs one line:
+level-2 wake rebuilds the engine and checks again. The tower output cache
+logs its cap:
 
 ```
-[drinkme.engine] images [slot 0]: 1 in the prompt (3600 image tokens); the tower ran 1x, 0 inside the reused prefix
+[drinkme] tower cache: up to 512.0 MiB of the tower's output in host RAM, least recently used out first (DRINKME_TOWER_CACHE_GIB or --tower-cache-gib; 0 turns it off)
 ```
+
+Each request with images logs one line. Every distinct image is counted once:
+the tower ran for it, it lay inside the reused prefix, or it came from the
+cache (a hit):
+
+```
+[drinkme.engine] images [slot 0]: 1 in the prompt (3600 image tokens); the tower ran 1x, 0 inside the reused prefix; tower cache: 0 hits, 1 miss (35.2 MiB of 512.0 MiB held)
+```
+
+With the cache off the line ends at `inside the reused prefix`.
 
 The tower's attention runs in dispatches of at most 33,554,432 query-key
 pairs, as [chunked prefill](#chunked-prefill) bounds the text model's. At
@@ -294,6 +336,136 @@ and repeated in every refusal:
 | `the checkpoint carries no image processor config` | nothing to preprocess with |
 | `this server's torch has no LANCZOS resize …` | Muse-Glimmer's preprocessing needs torch 2.12 or later |
 | `the vision tower's attention failed its boot self-test on this device (…)` | the self-test above |
+
+## Video input
+
+Qwen3.8-27B and MiMo-V2.6-Distill-Qwen-9B read video: the Qwen3.5
+architecture's processor takes it (`Qwen3VLVideoProcessor`, the checkpoint's
+`video_preprocessor_config.json`), and the same vision tower reads the
+frames. Video needs [image input](#image-input) to be on, the torch runtime,
+and PyAV, the optional `drinkme[video]` extra: after the lane is installed,
+`uv pip install av` in the server's environment (the extra's one package,
+FFmpeg included in its wheels). Without it every video part is refused,
+naming the extra. A model's `/v1/models` entry says whether this server
+reads video for it (`capabilities.video`) and, when it does, what it accepts
+(`capabilities.videoInput`).
+
+Chat Completions only, as vLLM's `video_url` part; the Responses and
+Messages APIs define no video part:
+
+```json
+{"role": "user", "content": [
+  {"type": "text", "text": "At what second does the counter first show 7?"},
+  {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAAIGZ0eXBpc29t…"}}]}
+```
+
+A video takes the [sources](#sources) an image does, under the same
+switches: a base64 data URL, an http(s) URL unless `--no-image-urls`, and a
+`file://` path under `--media-path`. An http(s) download has a 30 s deadline
+and is aborted past 64 MiB. MP4, MOV, WebM and MKV are read; the magic bytes
+decide the container (the declared media type only has to name one:
+`video/mp4`, `video/quicktime`, `video/webm`, `video/x-matroska`), and any
+codec PyAV's FFmpeg decodes is accepted (H.264, MPEG-4 Part 2 and VP9 are
+tested). The audio track is not read, and a clip's rotation metadata is not
+applied, as transformers' PyAV reader does not apply it. A video in a system
+turn is refused.
+
+### Frames, timestamps and tokens
+
+The processor reads 2 frames per second of the clip, by its own frame
+rate: `int(frames / fps × 2)` frames, at least 4 and at most 768, at evenly
+spaced indices, the first frame and the last always among them. Every frame
+is resized to one size under a budget for the whole clip, 25,165,824 pixels
+on Qwen3.8-27B, and frames are read in pairs: one video token covers 32×32
+pixels over 2 frames, so a clip takes at most 12,288 video tokens. In the
+prompt, each pair is `<t seconds>`, `<|vision_start|>`, its tokens and
+`<|vision_end|>`, with t the pair's time to a tenth of a second; the
+timestamp text takes 6 to 8 tokens. M-RoPE positions each pair as a
+one-frame image. This is the layout of the Qwen3-VL release processor and of
+vLLM; transformers 5.15.1 keeps an extra `<|vision_start|>`/`<|vision_end|>`
+pair around the whole video.
+
+A pair's time is the mean of its two frames' presentation times, measured
+from the clip's first frame. For a constant-frame-rate clip that is the
+frame index over the frame rate, transformers' own value; a variable-rate
+clip (a phone's screen recording) gets the times its frames were shown. A
+clip whose container names no frame rate is refused rather than given
+transformers' 24 fps fallback, under which every timestamp would be wrong.
+
+| Clip (Qwen3.8-27B) | Frames read | Frame size | Video tokens | Prompt tokens with timestamps |
+|---|---|---|---|---|
+| 5 s, 640x360 | 10 | 640x352 | 1,100 | 1,140 |
+| 10 s, 1280x720 | 20 | 1280x704 | 8,800 | 8,880 |
+| 10 s, 1920x1080 | 20 | 1472x832 | 11,960 | 12,040 |
+| 60 s, 1920x1080 | 120 | 608x320 | 11,400 | 11,930 |
+| 384 s, 1920x1080 | 768 | 224x128 | 10,752 | 14,482 |
+
+Past about 10 s at 1080p the budget binds, so a longer clip costs about the
+same tokens at a lower resolution per frame. `/tokenize` and the
+[context check](#context-check-and-max_tokens-clamp) count every timestamp,
+marker and video token, so a clip that does not fit the window is refused
+before a token generates. A prepared video stays in host memory until the
+tower has read it: up to 302 MB of float32 at the budget. Frames are resized
+as they are decoded, so a long or large source never holds its frames at
+full size. The tower runs once per video, and the [prefix
+cache](#prefix-caching-with-images) keys a video on its pixel content, as it
+keys an image.
+
+### Video limits
+
+| Limit | Value | Refusal `code` |
+|---|---|---|
+| Videos per request | 4, counted before anything is decoded | `too_many_videos` |
+| Encoded size, per video | 64 MiB once decoded, downloaded or read; a data URL also counts against the 128 MiB body cap | `video_too_large` |
+| Length | the processor's 768 frames at 2 frames per second: 384 s. A longer clip would be read at fewer frames per second, so it is refused | `video_too_long` |
+| Frames | at least 2 (one pair); send one frame as an image | `video_too_short` |
+| Source pixels, per frame | 50,000,000, read from the container before decoding | `video_too_many_pixels` |
+| Aspect ratio | a long side over 200 times the short | `video_aspect_ratio` |
+
+The other codes mirror the image ones: `video_url_fetch_off`,
+`video_file_off`, `video_file_path`, `video_fetch_unreachable`,
+`video_fetch_timeout`, `video_fetch_status`, `video_url`, `video_data_url`,
+`video_media_type`, `video_base64`, `video_format`, `video_decode` (no video
+stream, no frame rate, or a decoder failure) and `video_decoder_missing`
+(`serving/video.py`'s `VideoError` lists each). Text that spells
+`<|video_pad|>` is refused as `image_injection`, as for every modality
+marker. Decoding runs FFmpeg over the bytes a client sent, outside the
+generation lock; on a server other machines can reach, the same
+`--no-image-urls` posture applies, and FFmpeg's decoders are a larger
+surface than Pillow's.
+
+### When video is refused
+
+A model with video input logs it at boot:
+
+```
+[drinkme] video input: qwen3_5, 2 fps from the clip's own frame rate, at most 768 frames (384 s), 25,165,824 pixels per clip
+```
+
+Otherwise the boot line is `video input: off — <reason>`, and every video
+part is refused with it:
+
+| Reason | Meaning |
+|---|---|
+| the image input's reason | no image input at all ([above](#when-images-are-refused)); `DRINKME_VISION=0` turns video off with it |
+| `this server has no video input for <model_type>` | drinkme preprocesses video for Qwen3.5 only |
+| `the checkpoint carries no video processor config` | no `video_preprocessor_config.json` |
+| `PyAV is not installed; install PyAV, the drinkme[video] extra …` | the extra above |
+| `the checkpoint's config names no video_token_id, …` | nothing to expand a video into |
+
+Each request with a video logs the tower's work beside the images. A video
+counts once, however many frame groups it has:
+
+```
+[drinkme.engine] images [slot 0]: 0 in the prompt (0 image tokens), videos: 1 (10 frame groups, 11960 video tokens); the tower ran 1x, 0 inside the reused prefix; tower cache: 0 hits, 1 miss (116.8 MiB of 512.0 MiB held)
+```
+
+A second question after the same video, in a request of its own, restores
+the context checkpoint at the video's end and logs `the tower ran 0x, 1
+inside the reused prefix`. The same video under another system prompt logs
+`the tower ran 0x, 0 inside the reused prefix; tower cache: 1 hit, 0 misses`
+([prefix caching with images](#prefix-caching-with-images),
+[the tower output cache](#the-tower-output-cache)).
 
 ## SDPA backend on ROCm
 
@@ -397,7 +569,8 @@ metadata under `drinkme`. Example response from Qwen3-1.7B on CPU with
           "thinking": "closed",
           "toolFormat": "json",
           "thinkingSwitch": "chat_template_kwargs.enable_thinking",
-          "vision": false
+          "vision": false,
+          "video": false
         },
         "sampling": {
           "profile": null,
@@ -426,7 +599,7 @@ metadata under `drinkme`. Example response from Qwen3-1.7B on CPU with
 | `sourceDtype` | the released precision the pack serves exactly |
 | `contextWindow` | allocated context window; use it to configure client compaction |
 | `device` | where the weights sit; the same string as `/health`'s |
-| `capabilities` | `thinking`: `open` when the default prompt already ends inside a think block, `closed` when the template reacts to `enable_thinking` but the default prompt does not open a think block (the model may still think; `closed` does not mean off), `always` when the model reasons in every reply and no request field turns it off (Muse-Glimmer-30B's `to=self` messages, returned as reasoning), `none` when the template has no thinking switch; `toolFormat` ([tool formats](serve-tool-formats.md)); `thinkingSwitch` — the request field that flips `thinking` off, or `null` when `thinking` is `always` or `none` and there is nothing to flip; `vision` — whether this server reads images for the model; and, when it does, `imageInput`: `maxPixels` (the [pixel cap](#the-pixel-cap)), `formats` and `sources` (`data`, plus `url` and `file` when [enabled](#sources)) |
+| `capabilities` | `thinking`: `open` when the default prompt already ends inside a think block, `closed` when the template reacts to `enable_thinking` but the default prompt does not open a think block (the model may still think; `closed` does not mean off), `always` when the model reasons in every reply and no request field turns it off (Muse-Glimmer-30B's `to=self` messages, returned as reasoning), `none` when the template has no thinking switch; `toolFormat` ([tool formats](serve-tool-formats.md)); `thinkingSwitch` — the request field that flips `thinking` off, or `null` when `thinking` is `always` or `none` and there is nothing to flip; `vision` — whether this server reads images for the model; and, when it does, `imageInput`: `maxPixels` (the [pixel cap](#the-pixel-cap)), `formats` and `sources` (`data`, plus `url` and `file` when [enabled](#sources)); `video` — whether it reads video; and, when it does, `videoInput`: `fps`, `maxFrames`, `maxSeconds`, `maxPixels` (the budget over a clip's frames), `maxBytes`, `formats` and `sources` ([video input](#video-input)) |
 | `sampling.defaults` | effective sampling defaults for a request with no overrides ([models](models.md)) |
 | `sampling.profile` | `null` here; a `--profile NAME` adds an `<id>:NAME` entry whose `sampling.profile` is `NAME` and whose `defaults` carry the overlay |
 
@@ -434,7 +607,7 @@ The `drinkme` object is camelCase throughout, like the record
 [lexicon](../lexicons/README.md). The vLLM-shaped routes (`/health`,
 `/tokenizer_info`, `/sleep`, `/wake_up`) keep vLLM's snake_case, with units
 as suffixes (`uptime_s`, `parked_bytes`). `/tokenizer_info` repeats the
-capabilities as `thinking`, `tool_format`, `thinking_switch` and `vision`.
+capabilities as `thinking`, `tool_format`, `thinking_switch`, `vision` and `video`.
 
 Aliases are the menu name when `--model` names a menu entry (`Qwen3-8B`
 beside `Qwen/Qwen3-8B`) and any `--served-model-name` or

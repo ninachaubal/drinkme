@@ -18,6 +18,8 @@ node_modules/
 # Local working directories, never committed
 notes/
 verification/
+# a builder's scratch (a --target site-packages for an optional dependency, ...)
+.scratch/
 # Created by `drinkme bench`: one lexicon-shaped record per run, yours to keep or publish.
 measurements/
 

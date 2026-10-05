@@ -49,10 +49,21 @@ compares the two rule by rule.
   1,024 tokens, Muse-Glimmer up to 2,048), is not split: its rings still hold
   every earlier position after the prefill, and the checkpoints are copied
   out of them.
+- **Media ends:** a prompt with images or videos also takes one at the end of
+  each media item, past its closing marker (`<|vision_end|>` on Qwen3.5), for
+  the last two items in the prompt (`DRINKME_MEDIA_CHECKPOINTS`, default 2,
+  `0` takes none). A new question after the same image or video parts from
+  the slot there, and no other checkpoint is near it: on Qwen3.8-27B a
+  follow-up about a 2,782-token clip restored to 2,062, mid-video, and the
+  tower ran again. With the checkpoint at the video's end it reuses
+  everything through it and the tower does not run. These are not dropped
+  for being close to another checkpoint; a slot keeps at most
+  `DRINKME_MEDIA_CHECKPOINTS` of them, and a new one replaces the lowest.
 - **How many:** up to `--ctx-checkpoints N` per slot (`DRINKME_CTX_CHECKPOINTS`,
   default 32, the flag wins). Other requests' checkpoints closer than 8,192
   tokens to the previous one are dropped, so a slot holds at most five at the
-  default context of 8,192.
+  default context of 8,192, or seven with the two media ends on an engine that
+  reads images.
 - **Restore:** the newest checkpoint at or below the shared prefix, leaving at
   least one prompt token to compute. A cache of full attention only, or one
   whose rings have not wrapped yet, rewinds by length instead.
@@ -63,8 +74,11 @@ compares the two rule by rule.
   free.
 - **Images:** no checkpoint lands inside an image run that a prefill span may
   not cut (gemma-4's bidirectional runs, and causal runs that fit the prefill
-  chunk); it moves to the run's start. Images inside the reused prefix skip
-  the tower.
+  chunk); it moves to the run's start. Images and videos inside the reused
+  prefix skip the tower. One outside it that the tower has read before, in
+  any conversation, is copied back from the tower output cache instead
+  ([`serving/tower_cache.py`](../src/drinkme/serving/tower_cache.py);
+  `--tower-cache-gib`, default 0.5 GiB of host RAM, `0` off).
 - **Disk and sleep:** a slot's checkpoints are written with it
   (`checkpoints.safetensors` beside `cache.safetensors`) and come back with it,
   including after a sleep. A stored slot the prompt parts from is served up to
