@@ -20,6 +20,8 @@ llama.cpp and vLLM, so expect rough edges, and please report what breaks.
 **drinkme is developed with AI coding agents.** People direct the work, test it
 on real hardware, and review every change before it merges.
 
+What changed in each version is in the [changelog](CHANGELOG.md).
+
 ## Run the server
 
 drinkme runs on Linux with an NVIDIA or ROCm-supported AMD GPU, with AMD
