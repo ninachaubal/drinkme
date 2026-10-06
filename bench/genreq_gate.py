@@ -1,7 +1,7 @@
-"""The exactness gate's driver: a FIXED request matrix against a running
+"""The engine-seam gate's driver: a FIXED request matrix against a running
 drinkme server, greedy, one transcript sha per case, plus where the server's
-TTFT came from — so a server built before the seam change and one built
-after can be held sha-identical case by case.
+TTFT came from — so a server built before a seam change and one built after
+can be compared case by case.
 
     python bench/genreq_gate.py --base-url http://127.0.0.1:3299 -o before.json
 
@@ -24,7 +24,15 @@ delta carrying reasoning or content), and the sum's delta is that value.
 The client-side first-delta time is recorded beside it for streamed cases.
 
 Verdict-free on its own: this script records; the compare step is
-`python bench/genreq_gate.py --compare before.json after.json`.
+`python bench/genreq_gate.py --compare before.json after.json`. It fails
+(exit 1) when a case is missing or answered with an error, when the server
+observed TTFT a different number of times for the same reply, when the two
+servers counted a different number of prompt tokens (the request rendered
+differently), or when the json_schema case's reply does not parse to its
+schema. A transcript that differs is reported with the field and character
+where it parts and does not fail: greedy transcripts can part at a near-tie,
+and over HTTP there are no logits to tell one from a bug (docs/method.md,
+"Numerical behavior").
 """
 
 from __future__ import annotations
@@ -304,9 +312,32 @@ def run(base: str, out_path: str | None, max_tokens: int, timeout: float) -> dic
     return receipt
 
 
+def where_parts(b: dict, a: dict) -> str:
+    """Two assembled transcripts: the first field (in the wire-neutral
+    shape's order) whose value differs, and the character where it parts."""
+    for key in ("reasoning", "content", "tool_calls", "finish", "usage"):
+        x, y = b.get(key), a.get(key)
+        if x != y:
+            if isinstance(x, str) and isinstance(y, str):
+                at = next((i for i, (p, q) in enumerate(zip(x, y)) if p != q), min(len(x), len(y)))
+                return f"{key} parts at char {at}"
+            return f"{key} differs"
+    return "same fields, different sha"
+
+
+def schema_ok(transcript: dict) -> bool:
+    """The json_schema case's reply parses to TITLE_SCHEMA: one string
+    `title` and nothing else (the grammar constraint's job)."""
+    try:
+        obj = json.loads(transcript.get("content") or "")
+    except ValueError:
+        return False
+    return isinstance(obj, dict) and set(obj) == {"title"} and isinstance(obj["title"], str)
+
+
 def compare(before_path: str, after_path: str) -> int:
     before, after = json.load(open(before_path)), json.load(open(after_path))
-    bad = []
+    bad, parted, n_same = [], [], 0
     print(f"{'case':28s} {'before sha':14s} {'after sha':14s} {'ttft obs':9s} before/after ttft (s)")
     for name in before["cases"]:
         b, a = before["cases"][name], after["cases"].get(name)
@@ -314,12 +345,29 @@ def compare(before_path: str, after_path: str) -> int:
             bad.append(f"{name}: missing after"); continue
         same = b["sha256"] == a["sha256"]
         obs = f"{b['server_ttft_observations']}/{a['server_ttft_observations']}"
+        part = "" if same else where_parts(b["transcript"], a["transcript"])
         print(f"{name:28s} {b['sha256'][:12]}   {a['sha256'][:12]}   {obs:9s} "
-              f"{b['server_ttft_s']} / {a['server_ttft_s']}{'' if same else '   *** DIFFERS ***'}")
+              f"{b['server_ttft_s']} / {a['server_ttft_s']}{'' if same else '   differs: ' + part}")
+        errors = [f"{name}: {side} answered {c['status']}"
+                  for side, c in (("before", b), ("after", a)) if c["status"] != 200]
+        if errors:
+            bad += errors
+            continue
+        n_same += same
         if not same:
-            bad.append(f"{name}: sha differs")
-        if b["server_ttft_observations"] != a["server_ttft_observations"]:
-            bad.append(f"{name}: server TTFT observed {obs} times — a different event")
+            # a reply that parts can change shape (a tool call where the other
+            # wrote text), and with it how many TTFTs the server observes
+            parted.append(f"{name} ({part}; TTFT observed {obs} times)")
+        elif b["server_ttft_observations"] != a["server_ttft_observations"]:
+            bad.append(f"{name}: server TTFT observed {obs} times for the same reply — a different event")
+        pb = (b["transcript"].get("usage") or {}).get("prompt")
+        pa = (a["transcript"].get("usage") or {}).get("prompt")
+        if pb != pa:
+            bad.append(f"{name}: prompt tokens {pb} before, {pa} after — the request rendered differently")
+        if name == "chat/json_schema":
+            for side, c in (("before", b), ("after", a)):
+                if not schema_ok(c["transcript"]):
+                    bad.append(f"{name}: {side}'s reply does not parse to the schema")
     zero = [n for n, c in after["cases"].items() if c["server_ttft_observations"] == 0]
     if zero:
         # a reply that is ALL tool call never carries reasoning or content, so
@@ -327,8 +375,11 @@ def compare(before_path: str, after_path: str) -> int:
         # not a difference
         print(f"note: no server TTFT observed on either arm for {zero} "
               "(the reply carried no reasoning/content delta)")
-    print("VERDICT: " + ("ALL CASES SHA-IDENTICAL, TTFT OBSERVED THE SAME NUMBER OF TIMES PER CASE"
-                         if not bad else "; ".join(bad)))
+    print(f"transcripts: {n_same}/{len(before['cases'])} the same sha"
+          + (f"; parted (reported, not failed): {'; '.join(parted)}" if parted else ""))
+    print("VERDICT: " + ("PASS: every case answered, TTFT observed the same number of times per "
+                         "case, the same prompt tokens, the json_schema reply parses"
+                         if not bad else "FAIL: " + "; ".join(bad)))
     return 0 if not bad else 1
 
 

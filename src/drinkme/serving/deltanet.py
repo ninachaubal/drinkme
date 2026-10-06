@@ -36,8 +36,9 @@ reference L2-normalizes q and k in the input dtype (bf16 on the served
 27B) before casting to fp32, and reduces `S·k` and `S·q` as torch `sum`
 kernels; the fused kernel normalizes and reduces in fp32 registers. Same
 distribution, a different rounding — the greedy transcript of a near-tie
-can flip (AGENTS.md: the invariant is bit-identical WEIGHTS). Serial ≡ MTP
-still holds by construction: both paths call the one function bound here.
+can flip (AGENTS.md: the invariant is bit-identical WEIGHTS). Serial decode
+and the MTP replay still run the same recurrence: both paths call the one
+function bound here.
 
 THE KNOB. `DRINKME_DELTANET_KERNEL=fla|torch`; unset = fla when the device
 is an accelerator and the kernel passes a probe (below), torch otherwise.

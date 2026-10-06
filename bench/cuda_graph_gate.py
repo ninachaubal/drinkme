@@ -30,9 +30,18 @@ pool, and a second pass re-checks each width's replay against its eager
 step with every other width replayed (and rewound) before each of its
 replays: the aliasing a shared pool could introduce fails that pass.
 
+  4. serve's own generate (--engine-specs), eager and graph, speculation
+     off and on: each run's emitted rows (token, top-1 minus top-2 logit),
+     and where two runs part — graph against eager, speculation against
+     serial — with both runs' margins there and agreement.label's verdict
+     (agree, near-tie, or above agreement.NEAR_TIE_MARGIN).
+
 `--compare stock.json compressed.json` reads two arms' JSONs and prints
-whether the compressed arm's graph-mode tokens equal stock's (and the
-eager bench loop's, for the known near-tie class).
+where the compressed arm's tokens part from stock's: the bench loop's,
+graph and eager, with the static step's margins at that index, and serve's
+generate per setting, with both runs' margins and the near-tie verdict.
+Two arms over the same weights agree or part at a near-tie
+(docs/method.md, "Numerical behavior").
 
     python bench/cuda_graph_gate.py --model Qwen3-8B --arm compressed \\
         --pack-dir /vol/packs/Qwen3-8B-sip --json out/gate_compressed.json
@@ -59,6 +68,7 @@ from drinkme.serving.checkpoint import resolve_source, tokenizer as load_tokeniz
 from drinkme.serving.kvcache import LiveStaticCache  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from agreement import describe, fork, label  # noqa: E402
 from decode_step_profile import load_arm, menu_model  # noqa: E402
 
 
@@ -420,13 +430,22 @@ ENGINE_PROMPT = ("Write a Python function that returns the n-th Fibonacci number
                  "repeat the function's body once more with the variable names in uppercase.")
 
 
-def first_row(a: list, b: list) -> str:
+def rows_fork(a: list, b: list) -> dict:
     """Where two runs' emitted rows ([token, top-1 minus top-2 logit] per
-    row, engines.sample_next wrapped) first part, and each run's margin there."""
-    d = next((j for j, (x, y) in enumerate(zip(a, b)) if x[0] != y[0]), None)
-    if d is None:
-        return ""
-    return f"; first differing emitted row {d}: {a[d][0]} (margin {a[d][1]}) against {b[d][0]} (margin {b[d][1]})"
+    row, engines.sample_next wrapped) first part, and each run's margin
+    there (agreement.fork)."""
+    return fork([x[0] for x in a], [y[0] for y in b], [x[1] for x in a], [y[1] for y in b])
+
+
+def text_and_rows(a: dict, b: dict) -> str:
+    """Two engine runs side by side: the same text, or the character where
+    their texts part and the emitted row where their picks part."""
+    if a["text"] == b["text"]:
+        return f"same text ({len(a['text'])} chars)"
+    at = next((i for i, (p, q) in enumerate(zip(a["text"], b["text"])) if p != q),
+              min(len(a["text"]), len(b["text"])))
+    rows = describe(rows_fork(a["rows"], b["rows"]), "emitted row") if "rows" in a and "rows" in b else "no rows"
+    return f"text parts at char {at}; {rows}"
 
 
 def engine_runs(model, tok, snap, arm: str, model_id: str, pack_dir, n_tokens: int, specs: list) -> dict:
@@ -507,16 +526,12 @@ def _engine_runs(model, tok, snap, arm, model_id, pack_dir, n_tokens, specs, rec
     base = out.get("graph/off")
     for key, r in out.items():
         if key.startswith("graph/") and key != "graph/off" and base:
-            at = next((i for i, (a, b) in enumerate(zip(r["text"], base["text"])) if a != b), None)
-            print(f"VERDICT engine {arm} {key} == graph/off (speculation byte-identical to serial in graph mode): "
-                  + ("IDENTICAL" if r["text"] == base["text"] else
-                     f"DIFFERS at char {at}{first_row(r['rows'], base['rows'])}"), flush=True)
+            print(f"VERDICT engine {arm} {key} vs graph/off (speculation against serial in graph mode): "
+                  f"{text_and_rows(r, base)} -> {label(rows_fork(r['rows'], base['rows']))}", flush=True)
     if "eager/off" in out and base:
-        same = out["eager/off"]["text"] == base["text"]
-        at = next((i for i, (a, b) in enumerate(zip(out["eager/off"]["text"], base["text"])) if a != b), None)
         print(f"VERDICT engine {arm} graph/off vs eager/off (today's serve): "
-              + ("IDENTICAL" if same else f"DIFFERS at char {at}{first_row(base['rows'], out['eager/off']['rows'])}"),
-              flush=True)
+              f"{text_and_rows(base, out['eager/off'])} -> "
+              f"{label(rows_fork(base['rows'], out['eager/off']['rows']))}", flush=True)
     return out
 
 
@@ -560,13 +575,9 @@ def warm_runs(model, tok, snap, arm: str, model_id: str, n_tokens: int) -> dict:
                              "cached": r.cached_tokens, "spec": (engine.last_spec_stats or {}).get("mode")})
             out[key] = runs
             for i in (1, 2):
-                a, b = runs[0]["tokens"], runs[i]["tokens"]
-                d = next((j for j, (x, y) in enumerate(zip(a, b)) if x != y), None)
-                where = ("identical token for token" if d is None else
-                         f"first differs at sampled row {d}: cold {a[d]} (margin {runs[0]['margins'][d]}), "
-                         f"warm {b[d]} (margin {runs[i]['margins'][d]})")
+                f = fork(runs[0]["tokens"], runs[i]["tokens"], runs[0]["margins"], runs[i]["margins"])
                 print(f"VERDICT warm {arm} {key} run {i} (reused {runs[i]['cached']} prompt tokens, "
-                      f"{runs[i]['spec']}) vs cold run 0: {where}", flush=True)
+                      f"{runs[i]['spec']}) vs cold run 0: {describe(f, 'sampled row')}", flush=True)
             small = sorted(runs[0]["margins"])[:3]
             print(f"  warm {arm} {key}: the cold run's three smallest margins {small}", flush=True)
             del engine
@@ -590,7 +601,7 @@ def compare(a_path: str, b_path: str) -> None:
     for key, what in (("graph_tokens", "graph-mode bench loop"), ("eager_tokens", "eager bench loop")):
         x, y = a.get(key), b.get(key)
         if x is None or y is None:
-            print(f"VERDICT {b['arm']}=={a['arm']} {what}: MISSING", flush=True)
+            print(f"VERDICT {b['arm']} vs {a['arm']} {what}: MISSING", flush=True)
             continue
         d = first_diff(x, y)
         gap = ""
@@ -599,20 +610,18 @@ def compare(a_path: str, b_path: str) -> None:
             ma = next((r.get("margins") for r in a.get("bitwise", []) if r.get("rows") == 1), None)
             mb = next((r.get("margins") for r in b.get("bitwise", []) if r.get("rows") == 1), None)
             if ma and mb and g < len(ma):
-                gap = f"; top-2 logit margin there: {a['arm']} {ma[g]}, {b['arm']} {mb[g]}"
-        print(f"VERDICT {b['arm']}=={a['arm']} {what} tokens: "
-              + ("EQUAL" if d is None else f"DIFFER at generated token {d - a.get('prompt_tokens', 0)}")
+                gap = (f"; top-2 logit margin there in each arm's static-step run: "
+                       f"{a['arm']} {ma[g]}, {b['arm']} {mb[g]}")
+        print(f"VERDICT {b['arm']} vs {a['arm']} {what} tokens: "
+              + ("agree" if d is None else f"part at generated token {d - a.get('prompt_tokens', 0)}")
               + f" ({len(x)} ids){gap}", flush=True)
     ea, eb = a.get("engine") or {}, b.get("engine") or {}
     for key in sorted(set(ea) & set(eb)):
         if isinstance(ea[key], dict) and "text" in ea[key]:
-            same = ea[key]["text"] == eb[key]["text"]
-            at = next((i for i, (p, q) in enumerate(zip(ea[key]["text"], eb[key]["text"])) if p != q), None)
-            rows = (first_row(eb[key]["rows"], ea[key]["rows"])
-                    if not same and "rows" in ea[key] and "rows" in eb[key] else "")
-            print(f"VERDICT {b['arm']}=={a['arm']} engine {key}: "
-                  + ("IDENTICAL text" if same else f"DIFFERS at char {at}")
-                  + f" ({len(ea[key]['text'])} chars){rows}", flush=True)
+            verdict = (f" -> {label(rows_fork(eb[key]['rows'], ea[key]['rows']))}"
+                       if "rows" in ea[key] and "rows" in eb[key] else "")
+            print(f"VERDICT {b['arm']} vs {a['arm']} engine {key}: "
+                  f"{text_and_rows(eb[key], ea[key])}{verdict}", flush=True)
     for L in sorted({r["live"] for r in a.get("long", []) if "live" in r}):
         ra = next(r for r in a["long"] if r.get("live") == L)
         rb = next((r for r in b.get("long", []) if r.get("live") == L), None)
@@ -699,7 +708,8 @@ def main() -> None:
         report["graph_tok_s"] = graph_s
         same = report["graph_tokens"] == report["eager_tokens"]
         print(f"BENCH LOOP {args.arm}: eager {median(eager_s)} tok/s, {report['graph_ran']} {median(graph_s)} tok/s "
-              f"({median(graph_s) / median(eager_s):.2f}x); graph tokens == eager bench-loop tokens: {same}", flush=True)
+              f"({median(graph_s) / median(eager_s):.2f}x); graph tokens agree with the eager bench loop's: {same}",
+              flush=True)
         save()
         # 2. graph == eager static, per rows
         report["bitwise"] = []

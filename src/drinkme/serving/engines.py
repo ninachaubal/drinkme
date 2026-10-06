@@ -56,8 +56,9 @@ not the conversation. Correctness posture:
     request simply resets.
 Numerics: a reused prefix is the earlier forward's KV verbatim; re-prefilling
 the suffix batches differently than a cold full prefill, so warm-vs-cold is
-"same computation modulo kernel reduction order" (chunked-prefill class), while
-the stock-vs-compressed A/B stays exact — both arms run the identical policy.
+"same computation modulo kernel reduction order" (chunked-prefill class). Both
+arms of the stock-vs-compressed A/B run the identical policy, so prefix reuse
+is not a difference between them.
 --prefix-slots 0 (DRINKME_PREFIX_SLOTS=0) restores per-request caches.
 
 MULTI-SLOT (the prefix cache): DRINKME_PREFIX_SLOTS=N keeps N whole cache
@@ -135,8 +136,8 @@ served yesterday would be a regression wearing a safeguard's clothes.
 MTP SPECULATIVE DECODING (serving/mtp.py): with DRINKME_MTP_DEPTH=k the
 one-token step becomes a draft/verify cycle — the checkpoint's own MTP head
 drafts k tokens, the trunk verifies all k+1 positions in ONE forward, and the
-longest agreeing prefix is emitted. Same tokens, fewer weight-reads. A
-SAMPLED request speculates too, by rejection sampling
+longest agreeing prefix is emitted. The trunk's own picks, fewer
+weight-reads. A SAMPLED request speculates too, by rejection sampling
 (serving/speculative.py): same distribution per token, fewer weight-reads.
 Four things about it live in THIS file: `pending` (tokens a cycle decided but
 the emit machinery has not delivered yet), `from_cycle` (how many of them
@@ -1877,9 +1878,9 @@ class HFEngine:
                 # 0.474 MiB per prompt token, 121.2 GiB at the 262144 context
                 # we advertise, on a 124 GiB machine. A live 500 at 21k tokens is
                 # what found it. PAIRED with the last_row_only below: both
-                # arms narrow or neither does, or MTP-on and MTP-off fork on
-                # a near-tie (see mtp.forward_with_hidden's docstring for the
-                # full reasoning). These are ONE change.
+                # paths narrow, so speculation on and off take the first
+                # token's row from the same 1-row lm_head (see
+                # mtp.forward_with_hidden's docstring). These are ONE change.
                 logits = prefill.run(self.model, ids, lcp, cache, self.device, chunk,
                                      **with_image, **at)
                 if not self._hot_off and (params.repetition_penalty != 1.0
@@ -1908,9 +1909,8 @@ class HFEngine:
             else:
                 # n-gram speculation, ngram-only: the proposer reads token ids, never hidden
                 # states, so prefill is the SERIAL loop's prefill, character
-                # for character. That is what lets this arm's greedy identity
-                # rest on "nothing before the decode loop changed" instead of
-                # on a near-tie argument about two spellings of lm_head.
+                # for character: speculation changes nothing before the
+                # decode loop.
                 logits = prefill.run(self.model, ids, lcp, cache, self.device, chunk,
                                      **with_image, **at)
                 spec.begin(cache, ids, None, lcp, **with_image)

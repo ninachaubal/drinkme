@@ -541,8 +541,9 @@ def test_the_gpu_instrument_runs_end_to_end_on_a_toy(hybrid):
     engine and not of the model size. What it cannot prove is the real
     model's numerics: on a toy with random weights, warm-vs-cold near-ties
     flip greedy argmax for reasons that have nothing to do with slots (the
-    prefix-cache tests next door say the same), so the argmax and text claims
-    belong to the GPU run. The delta bound here is loose on purpose."""
+    prefix-cache tests next door say the same), so where warm and cold part,
+    and at what margin, belongs to the GPU run. The delta bound here is loose
+    on purpose."""
     verify = _bench_module()
     model, tok, cfg = hybrid
     tap = verify.ModelTap(model)
@@ -555,6 +556,9 @@ def test_the_gpu_instrument_runs_end_to_end_on_a_toy(hybrid):
     assert all(r["logits_seen"] for r in rows)  # the tap saw every prefill row
     assert v["all_cache_as_expected"]  # three threads, three slots, no resets
     assert v["max_abs_delta"] < 1e-2
+    # every generated token's pick and margin, for where warm and cold part
+    assert all(len(w["ids"]) == len(w["margins"]) > 0 for w in warm)
+    assert all("picks" in r["first_token"] for r in rows)
 
     ev, _ = verify.run_schedule(eng, tap, verify.EVICT, TOY_CONVS,
                                 max_tokens=4, hists=hists, label="toy-evict")

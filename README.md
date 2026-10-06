@@ -40,10 +40,11 @@ that wheel is a CUDA build, so `serve` refuses to start until you set
 untested.
 
 Apple silicon uses MLX/Metal (install lane `metal`). On an M4 with 24 GB,
-drinkme has served and benched Qwen3-1.7B and Qwen3-4B end to end, bit for bit
-against the source: 1.21× and 1.25× MLX-LM's BF16 decode speed. Other model
-families, the 8B and larger on that machine, and speculation on MLX are still
-in progress. See [Apple silicon status](docs/metal.md).
+drinkme has served and benched Qwen3-1.7B and Qwen3-4B end to end from packs
+verified bit for bit against the source, at 1.21× and 1.25× MLX-LM's BF16
+decode speed. Other model families, the 8B and larger on that machine, and
+speculation on MLX are still in progress. See
+[Apple silicon status](docs/metal.md).
 
 Start with Git, Python 3.10+, uv, and a C++ compiler (`c++`, `g++`, or
 `clang++` on PATH — packing needs one; serving an existing pack does not):

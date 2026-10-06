@@ -7,6 +7,21 @@ release of one major version.
 
 ## Unreleased
 
+## 1.1.1 — 2026-10-06
+
+### Changed
+
+- Docs and docstrings: bit-exactness is described as a property of packs.
+  Serving features (speculative decoding, prefix reuse, CUDA graphs) are
+  described by what they do, with output that agrees up to near-ties.
+- Bench gates report where two runs' output parts, with the logit margin
+  there when they have logits, and no longer fail on a near-tie difference
+  (`NEAR_TIE_MARGIN` in `bench/agreement.py`). They still fail on crashes,
+  bookkeeping errors, malformed output, and a part above that margin.
+- `DRINKME_MTP_DEPTH` past the fused verify window now warns about the cost
+  on a pack (a transient BF16 copy of each weight per verify pass) rather
+  than about near-tie differences.
+
 ## 1.1.0 — 2026-10-04
 
 ### Added

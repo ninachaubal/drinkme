@@ -20,14 +20,16 @@ checks it empirically (200k seeded steps per case, total variation against
 p_0 and against p_1 conditioned on the first draft being accepted) for q == p,
 q far from p, q with zero mass where p has mass, and p's support inside q's.
 
-WHAT "LOSSLESS" MEANS FROM HERE. The greedy MTP path is byte-identical to the
-serial loop (same argmax per row). The sampled path is DISTRIBUTION-identical:
-a seed-matched MTP transcript is not the seed-matched serial transcript (the
+WHAT HOLDS, PATH BY PATH. The sampled path is DISTRIBUTION-identical: a
+seed-matched MTP transcript is not the seed-matched serial transcript (the
 two consume the generator differently), but every token is drawn from the
-distribution the serial sampler would have used. The verification shape
-changes with that claim — property proof here, seed-matched statistical
-checks on the real model after merge — and so does the acceptance accounting,
-which is what the adaptive bail reads.
+distribution the serial sampler would have used. The greedy MTP path takes
+the trunk's own argmax at every row; a batched verify forward and a serial
+single-token one can round differently, so greedy agrees with the serial
+loop except at near-ties (tests/spec_agree.py). The verification shape
+follows from that — property proof here, seed-matched statistical checks on
+the real model after merge — and so does the acceptance accounting, which is
+what the adaptive bail reads.
 
 Zero-mass residual: p_i - q_i is nonnegative-and-nonzero somewhere whenever
 p_i != q_i (both sum to one), so an empty residual can only follow p_i == q_i,

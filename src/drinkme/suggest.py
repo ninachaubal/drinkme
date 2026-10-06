@@ -272,7 +272,7 @@ def unsized_note(rows: list[Model]) -> str:
 # zero effect on which model a budget actually picks.
 MODELS = [
     # The showcase model: hybrid DeltaNet 27B, validated on a Strix Halo
-    # (Ryzen AI Max+ 395) — byte-identical A/B, tools, think and MTP.
+    # (Ryzen AI Max+ 395) — the stock A/B, tools, think and MTP.
     Model("Qwen3.8-27B", "Qwen/Qwen3.8-27B", "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0", auto_eligible=True, model_type="qwen3_5"),
     Model("Qwen3-8B", "Qwen/Qwen3-8B", "b968826d9c46dd6066d109eabc6255188de91218", auto_eligible=True, model_type="qwen3"),
     Model("gemma-4-31B-it", "google/gemma-4-31B-it", "842da3794eaa0b77d5f08bae87a17459d91ff475", gated=True, auto_eligible=True, model_type="gemma4"),

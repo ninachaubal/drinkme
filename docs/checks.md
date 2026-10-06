@@ -5,7 +5,12 @@ in its row below. Device tests skip in the isolated CPU run, so a change to
 device execution also needs hardware acceptance
 ([developer instruments](../bench/README.md)). Read each gate's printed
 verdict, because the process exit status can be misleading
-([known behavior](dev-environment.md#known-behavior)). Server-based gates use a
+([known behavior](dev-environment.md#known-behavior)). Gates that compare two
+runs' output through `bench/agreement.py` report where the runs part and the
+top-1 minus top-2 logit margin there, and fail only on a part whose margin
+is above its `NEAR_TIE_MARGIN` (half a logit); a gate that sees no logits
+reports a difference and does not fail on it
+([numerical behavior](method.md#numerical-behavior)). Server-based gates use a
 test port, never 3215. Script names without a directory are in `bench/`;
 module paths are under `src/drinkme/`, tests under `tests/`.
 "Hardware acceptance" says whether a change type needs a run on real
@@ -90,10 +95,12 @@ still present.
   the menu's real narrow weights.
 - A hot-loop change runs `bench/hotloop_gpu_acceptance.py` through
   `hotloop_gpu_ab.sh` (both arms, byte-equal results).
-- Output identity: `bench/greedy_ab_smoke.sh` (compares compressed and
-  `--stock` transcripts; investigate differences with the
-  [numerical caveat](method.md#numerical-behavior)) and
-  `bench/logits_row_identity.py`.
+- Output agreement: `bench/greedy_ab_smoke.sh` (compressed and `--stock`
+  transcripts side by side, and where they part; it fails only when an arm
+  does not answer) and `bench/logits_row_identity.py` (prefill's one-row
+  `lm_head` against the every-row one; a flipped first token fails only
+  above the near-tie margin). Read a part with the
+  [numerical caveat](method.md#numerical-behavior).
 - A speed claim: `drinkme bench --pack-dir` on the real pack.
 
 ## Serving loop
@@ -103,7 +110,8 @@ suffice for sampling, template, and thinking-parser changes when they cover the
 affected token IDs.
 
 - Prefix cache: `bench/prefix_cache_verify.py` (warm vs cold over the wire,
-  one slot), `bench/prefix_slots_verify.py` (N slots, logits),
+  one slot, and the cached-token counts turn by turn),
+  `bench/prefix_slots_verify.py` (N slots, the slot schedule, logits),
   `bench/slot_restore_verify.py` (the on-disk tier across a process death).
 - Context checkpoints: `bench/ctx_checkpoint_probe.py` (CPU: where each
   re-rendered turn parts from its slot and what it reuses, on the real
@@ -123,10 +131,11 @@ affected token IDs.
 - CUDA graphs (`serving/cudagraph.py`, and any change to what the decode or
   verify step runs on CUDA): `bench/cuda_graph_gate.py` per arm on a CUDA
   card, then `--compare` (graph replay bitwise equal to the eager static
-  step at each verify width, the step at 4k and 16k live, serve's own
-  generate eager and graph with speculation off and on), and
-  `bench/cuda_graph_serve.py` over HTTP. A family joins `VERIFIED` only on
-  those verdicts ([CUDA graphs](serve-kernels.md#cuda-graphs)).
+  step at each verify width, the step at 4k and 16k live, and serve's own
+  generate eager and graph with speculation off and on, where any two runs
+  that part do so at a near-tie), and `bench/cuda_graph_serve.py` over
+  HTTP. A family joins `VERIFIED` only on those verdicts
+  ([CUDA graphs](serve-kernels.md#cuda-graphs)).
 
 ## Image input
 
@@ -160,8 +169,9 @@ first, from the smallest image up, before anything reads an answer:
   drinkme's two routes, drinkme's stock tower and its compressed tower are
   byte-equal, bounded and unbounded; the served tower is no further from an
   fp32 tower than transformers' own bf16 tower (1.5× its mean error at
-  most); the first-token logits agree; the processor's ids and pixels equal
-  transformers'. It proves the codec changes nothing in the tower.
+  most); the first-token logits pick the same token or part at a near-tie;
+  the processor's ids and pixels equal transformers'. It proves the codec
+  changes nothing in the tower.
 - `bench/gemma_vision_gate.py`, `bench/glimmer_vision_gate.py`: the same
   questions per model, one step per process: `tower` (the byte pin, plus
   `--fp32-check`: every ViT attention call against fp32 on its own inputs,
@@ -178,10 +188,10 @@ first, from the smallest image up, before anything reads an answer:
 - `bench/vision_smoke.py --model 27b|mimo|gemma|glimmer`: images over the
   wire. Screenshot nonces through chat, messages, a `tool_result` and
   responses, and a Retina capture; the pixel-cap ladder; the prefix cache
-  (warm equals cold, the tower skipped for a resent image, two same-size
-  images kept apart, a cold-tier restore); speculation (each arm matches
-  serial decode or parts at a near-tie); sleep and wake, with the tower's
-  bytes unchanged; and an agent loop.
+  (warm and cold agree or part at a near-tie, the tower skipped for a
+  resent image, two same-size images kept apart, a cold-tier restore);
+  speculation (each arm agrees with serial decode or parts at a near-tie);
+  sleep and wake, with the tower's bytes unchanged; and an agent loop.
 
 Video (`serving/video.py`) has CPU pins only. The suite runs transformers'
 own video path (PyAV decoding, `Qwen3VLVideoProcessor`, the processor's

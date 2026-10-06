@@ -1,15 +1,17 @@
 """MTP speculative decoding: Qwen3.8-27B's own trained multi-token-prediction
-head as a LOSSLESS draft model.
+head as a draft model (drafts only propose; the trunk decides).
 
 The head is 15 tensors that ship in the checkpoint (`mtp.*`, ~0.4B params) and
 that the text skeleton throws away (arms.ckpt_to_skel returns None for them).
 It predicts t+2 from the trunk's hidden state at t and the embedding of t+1.
 Draft k tokens with it, then run the MAIN model ONCE over the k+1 positions and
-keep the longest prefix where the main model's own greedy pick agrees: the
-emitted stream is EXACTLY the stream the one-token-at-a-time loop would have
-emitted, for ~1.9x fewer weight-reads per token. That composes with the codec
-the way this project's whole thesis wants it to — byte-identical weights AND
-byte-identical output, fewer bytes moved per token, multiplicatively.
+keep the longest prefix where the main model's own greedy pick agrees: every
+emitted token is the main model's own pick at its row, for ~1.9x fewer
+weight-reads per token. The batched verify forward and the serial
+single-token one can round differently in accumulation order, so the stream
+agrees with the one-token-at-a-time loop except at near-ties
+(tests/spec_agree.py). That composes with the codec: the pack cuts the bytes
+each weight-read moves, speculation cuts the weight-reads per token.
 
 SAMPLED REQUESTS: at
 temperature > 0 the same cycle runs REJECTION SAMPLING instead of the argmax
@@ -21,8 +23,9 @@ and serving/speculative.py accepts draft i with probability min(1, p/q),
 resamples the residual at the first rejection, and draws the bonus token
 from p_depth when every draft survives. Exact by theorem: every emitted
 token is distributed as the serial sampler's at that position, for any
-draft. The lossless claim is DISTRIBUTION identity there, byte identity on
-the greedy path, and the two paths share everything but the decision.
+draft. So the sampled path is distribution-identical to serial sampling, the
+greedy path takes the trunk's argmax at every row, and the two paths share
+everything but the decision.
 
 ON BY DEFAULT when the model allows: unset = AUTO, which
 resolves to depth 4 iff the checkpoint carries an MTP head and it loads.
@@ -156,7 +159,8 @@ THE FOUR STATE SURFACES ON REJECTION (the hard part)
    crossing it, full), and sets both counters. No recompute, no forward:
    the cost is that snapshot, and only on cycles that would have shifted.
    `tests/test_serving_gemma_spec.py` pins each regime against a cache that
-   only ever stepped serially, and the greedy id-identity end to end.
+   only ever stepped serially, and greedy agreement with serial decode end
+   to end.
 2. DeltaNet layers: the recurrence cannot rewind, so it must be REPLAYED per
    position. We wrap the installed `Qwen3_5GatedDeltaNet.forward` (instance
    level, not class level) for the M-in-2..MC_MAX-with-cache case: the four
@@ -195,9 +199,9 @@ grammar token by token, a per-step decision the batch cannot make ahead of
 itself; those requests take the serial loop. Greedy WITH penalties is
 supported on the argmax path — the main model's per-row pick goes through
 `sampling.sample_next` with the same params and the same running id lists
-the serial loop would have had, so the accepted stream is identical by
-construction rather than by argument — and the sampled path gets its p and
-q rows from `sampling.sample_probs` with the same id lists, which is the
+the serial loop would have had, so the penalties see the history serial
+decode would have shown them at every row — and the sampled path gets its p
+and q rows from `sampling.sample_probs` with the same id lists, which is the
 same fact one level down.
 """
 
@@ -223,14 +227,15 @@ from .speculative import (
 
 # The default depth: k=4 drafts -> M=5 verify rows.
 #
-# FUSED_M_MAX is the widest verify batch that still carries the SERIAL path's
-# numerics: codec/swap.py serves 2..MC_MAX through the multi-column kernel,
-# one read of the weights for the whole batch, each column bitwise
-# equal to the M=1 kernel's answer (bench/radix_mc_bitpin.py; within the oracle bound, bitwise recorded). Above the dense
-# threshold the batch switches to decode-once + native GEMM, whose reduction
-# order differs from the serial decode step's and so puts greedy near-ties in
-# play. Derived, not typed, so that moving either constant moves this warning
-# with it — and note the depth ceiling is FUSED_M_MAX - 1 drafts.
+# FUSED_M_MAX is the widest verify batch whose compressed Linears stay on the
+# serial step's kernel numerics: codec/swap.py serves 2..MC_MAX through the
+# multi-column kernel, one read of the weights for the whole batch, each
+# column bitwise equal to the M=1 kernel's answer (bench/radix_mc_bitpin.py;
+# within the oracle bound, bitwise recorded). Above the dense threshold the
+# batch switches to decode-once + native GEMM: a transient BF16 copy of every
+# weight per verify pass, in another reduction order. Derived, not typed, so
+# that moving either constant moves this warning with it — and note the depth
+# ceiling is FUSED_M_MAX - 1 drafts.
 DEFAULT_DEPTH = 4
 FUSED_M_MAX = min(MC_MAX, CompressedLinear.GEMM_MIN_ROWS - 1)
 
@@ -245,7 +250,7 @@ def _warn_once(key: str, msg: str) -> None:
 
 DEFAULT_DEPTH = 4
 """The auto-mode draft depth: the shipped/GPU-verified configuration (depth 4
-= verify M=5, inside the fused bit-identical window with margin)."""
+= verify M=5, inside the fused multi-column window with margin)."""
 
 # The adaptive bail (module docstring): the decided numbers are the DEFAULTS.
 # DRINKME_MTP_BAIL_WINDOW / DRINKME_MTP_BAIL_FLOOR override them per engine
@@ -389,11 +394,12 @@ def depth_from_env() -> int | None:
             "deepk",
             f"DRINKME_MTP_DEPTH={k} puts the verify batch at M={k + 1} rows, past the "
             f"M<={FUSED_M_MAX} fused window (codec/swap.py MC_MAX={MC_MAX}, "
-            f"GEMM_MIN_ROWS={CompressedLinear.GEMM_MIN_ROWS}): the "
-            "verify pass switches to decode-once + native matmul, whose "
-            "reduction order differs from the serial decode step. Still "
-            "lossless w.r.t. ITS OWN arithmetic, but greedy near-ties may fork "
-            "from the non-MTP transcript.")
+            f"GEMM_MIN_ROWS={CompressedLinear.GEMM_MIN_ROWS}): on a pack, every "
+            "verify pass then decodes each compressed weight to a transient "
+            "BF16 copy and runs a dense matmul over it, which moves more bytes "
+            "per cycle than the multi-column kernel's one read of the "
+            f"compressed weights. Depth {FUSED_M_MAX - 1} is the deepest "
+            "inside the window.")
     return k
 
 
@@ -1349,14 +1355,12 @@ def forward_with_hidden(model, input_ids, cache, cache_position,
     — the advertised context would be structurally unreachable: the
     discarded logits alone exceed the machine before weights or KV.
 
-    WHY NARROWING IS SAFE. On the compressed arm an M-row lm_head takes
+    BOTH PREFILLS NARROW. On the compressed arm an M-row lm_head takes
     decode-once + native GEMM while a 1-row one takes the GEMV kernel, and
-    those agree only to accumulation order; the divergence to guard against
-    is MTP-on vs MTP-off — one arm on the GEMV kernel while the other is on
-    the dense GEMM. Narrowing HERE ALONE would introduce it. It is safe only
-    because engines.py's non-MTP prefill narrows too (`logits_to_keep=1`),
-    so both arms take the 1-row path and still agree with each other. The
-    two are ONE design; do not change either half alone.
+    those differ in accumulation order. engines.py's non-MTP prefill narrows
+    too (`logits_to_keep=1`), so with speculation on or off the first token's
+    row comes out of the same 1-row lm_head path. The two are ONE design;
+    change both halves together.
 
     What does move is version-to-version: a 1-row lm_head and a many-row one
     differ in accumulation order, so a near-tie at token one can land the
@@ -1532,8 +1536,8 @@ class Speculator:
         self.last_bail_rate: float | None = None
         self._n0 = 0
         # A2 (docs/serve-speculation.md): the audit only applies to the sampled
-        # path — greedy is byte-identical to serial by construction, nothing
-        # to check against a theorem that only speaks in probabilities.
+        # path — greedy has no distribution to audit, nothing to check
+        # against a theorem that only speaks in probabilities.
         self.audit = SpeculativeAudit() if (sampled and _audit_enabled()) else None
         self.cache = None
         self.written = 0
@@ -1630,10 +1634,9 @@ class Speculator:
         """Does prefill have to hand `begin` the trunk's hidden states?
 
         Only a head does — it is seeded from them. An ngram-only request
-        therefore leaves prefill EXACTLY as the serial loop runs it
-        (logits_to_keep=1, one lm_head row), which is what lets its greedy
-        identity claim rest on "nothing before the decode loop changed"
-        rather than on a near-tie argument."""
+        therefore leaves prefill as the serial loop runs it (logits_to_keep=1,
+        one lm_head row): speculation changes nothing before the decode
+        loop."""
         return self.head is not None
 
     # -- after prefill ------------------------------------------------------
@@ -2167,8 +2170,8 @@ def spec_plan(has_head: bool, mtp_depth: int | None = None) -> SpecPlan:
 def maybe_speculate(head, model, params, depth: int | None = None, plan=None):
     """A Speculator for this request, or None to use the serial loop.
 
-    Greedy requests take the argmax accept loop (byte-identical to serial);
-    sampled ones — by the serial sampler's own test, temperature != 0 —
+    Greedy requests take the argmax accept loop (the trunk's argmax per
+    row); sampled ones — by the serial sampler's own test, temperature != 0 —
     take rejection sampling (distribution-identical; module docstring).
     Constrained output is out: the constraint walks a grammar token by
     token, which is a per-step decision the batch cannot make ahead of

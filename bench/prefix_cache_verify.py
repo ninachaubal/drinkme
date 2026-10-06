@@ -7,14 +7,25 @@ default. Same weights, same everything — so cold-vs-warm here IS old-vs-new.
 
 An agent-shaped conversation (long system prompt, history re-sent whole each
 turn, greedy) runs through both arms. For each turn we record text, TTFT
-(request sent -> first content delta on the SSE stream), total wall time, and
-usage.prompt_tokens_details.cached_tokens. The verdict:
+(request sent -> first content delta on the SSE stream), total wall time,
+usage.prompt_tokens_details.cached_tokens, and each emitted token's pick and
+top-1 minus top-2 logit margin (agreement.PickTap: the engine runs in this
+process). The report:
 
-  1. text equality per turn, cold vs warm (the numerics claim: same
-     computation modulo kernel batching — on peaked real-model logits this
-     should be byte-identical; any divergence is REPORTED, never hidden)
-  2. cached_tokens grows with history (the bookkeeping claim)
+  1. cold vs warm text per turn: same computation modulo kernel batching,
+     so the two agree or part at a near-tie. Where they part, the token
+     index and both runs' margins there are printed. Each arm conditions on
+     its own replies, so turns after the first that parts are not compared.
+  2. cached_tokens grows with history (the bookkeeping claim): 0 on every
+     cold turn and on the first warm one, then larger every warm turn and
+     below the prompt (at least one prompt token re-runs).
   3. TTFT ratio cold/warm per turn (the speedup agents feel)
+  4. a json_schema request's reply parses to its schema, and stock replays
+     the warm arm's history for the compressed-vs-stock A/B, compared like 1.
+
+Exit 2 on a bookkeeping failure, a structured-output failure, or a part
+whose margin is above agreement.NEAR_TIE_MARGIN; a near-tie part is
+reported and passes.
 
 Writes verification/prefix_cache_<model>_<host>_<date>.json next to the strix A/B.
 Run: uv run --no-sync python bench/prefix_cache_verify.py [--turns N] [--max-tokens N]
@@ -31,6 +42,9 @@ import platform
 import socket
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from agreement import NEAR_TIE_MARGIN, PickTap, above_margin, describe, fork  # noqa: E402
 
 # DEFAULT stays the 8B, the dense reference. Override with --pack to ask about a different model — notably a
 # HYBRID, where prefix reuse is a live question rather than a shipped default.
@@ -97,10 +111,12 @@ def request(port: int, messages: list[dict], max_tokens: int):
 
 
 def run_arm(port: int, eng, reuse: bool, turns: int, max_tokens: int,
-            label: str | None = None, replay: list | None = None):
+            label: str | None = None, replay: list | None = None,
+            tap: PickTap | None = None):
     """One arm of the conversation. With `replay`, the assistant turns come
-    from another arm's transcript (so both engines see IDENTICAL inputs per
-    turn — the A/B condition) instead of self-conditioning."""
+    from another arm's transcript (so both engines see the same inputs per
+    turn — the A/B condition) instead of self-conditioning. With `tap`, each
+    turn keeps its picks and margins."""
     eng._reuse = reuse
     eng.reset_prefix_cache()  # each arm starts cold in its own terms
     label = label or ("warm" if reuse else "cold")
@@ -109,6 +125,7 @@ def run_arm(port: int, eng, reuse: bool, turns: int, max_tokens: int,
     for i, u in enumerate(USERS[:turns]):
         history.append({"role": "user", "content": u})
         text, ttft, wall, usage = request(port, history, max_tokens)
+        ids, margins = tap.take() if tap is not None else ([], [])
         if ttft is None:
             # the server answered without a single content delta (e.g. an
             # in-stream 500) — fail as a REPORT, not a traceback on round(None)
@@ -120,11 +137,51 @@ def run_arm(port: int, eng, reuse: bool, turns: int, max_tokens: int,
         cached = (usage or {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
         out.append({"text": text, "ttft": round(ttft, 3), "wall": round(wall, 3),
                     "prompt_tokens": (usage or {}).get("prompt_tokens"),
-                    "cached_tokens": cached})
+                    "cached_tokens": cached, "ids": ids, "margins": margins})
         print(f"  [{label}] turn {len(out)}: "
               f"prompt={out[-1]['prompt_tokens']} cached={cached} "
               f"ttft={ttft:.2f}s wall={wall:.2f}s", flush=True)
     return out
+
+
+def compare_turns(a: list, b: list, own_history: bool) -> list[dict]:
+    """Per turn: whether two arms' texts are the same and, where they are
+    not, where their picks part (agreement.fork). With `own_history` each arm
+    re-sent its own replies, so every turn after the first that parts saw a
+    different prompt on each arm and is marked not compared."""
+    out, parted = [], False
+    for x, y in zip(a, b):
+        if parted and own_history:
+            out.append({"compared": False})
+            continue
+        same = x["text"] == y["text"]
+        out.append({"compared": True, "same_text": same,
+                    "fork": None if same else fork(x["ids"], y["ids"], x["margins"], y["margins"])})
+        parted = parted or not same
+    return out
+
+
+def cache_bookkeeping(cold: list, warm: list) -> list[str]:
+    """What is wrong with the arms' cached_tokens, one line per problem
+    (empty when right): 0 on every cold turn and on the first warm one (each
+    arm starts from an emptied cache), then on every later warm turn more
+    than the turn before and less than its prompt."""
+    bad = []
+    for i, t in enumerate(cold):
+        if t["cached_tokens"]:
+            bad.append(f"cold turn {i + 1}: cached {t['cached_tokens']}, expected 0")
+    for i, t in enumerate(warm):
+        c, p = t["cached_tokens"] or 0, t["prompt_tokens"]
+        if i == 0:
+            if c:
+                bad.append(f"warm turn 1: cached {c}, expected 0 after the reset")
+            continue
+        prev = warm[i - 1]["cached_tokens"] or 0
+        if c <= prev:
+            bad.append(f"warm turn {i + 1}: cached {c}, not more than turn {i}'s {prev}")
+        if p is None or c >= p:
+            bad.append(f"warm turn {i + 1}: cached {c} of {p} prompt tokens; at least one re-runs")
+    return bad
 
 
 def main():
@@ -162,10 +219,11 @@ def main():
     srv = start_server(eng, "127.0.0.1", 0)
     port = srv.server_address[1]
 
+    tap = PickTap().__enter__()  # every request below is served in this process
     print("[verify] COLD arm (reuse off — computation-identical to pre-cache code)")
-    cold = run_arm(port, eng, False, args.turns, args.max_tokens)
+    cold = run_arm(port, eng, False, args.turns, args.max_tokens, tap=tap)
     print("[verify] WARM arm (prefix cache on)")
-    warm = run_arm(port, eng, True, args.turns, args.max_tokens)
+    warm = run_arm(port, eng, True, args.turns, args.max_tokens, tap=tap)
 
     # -- structured output smoke, live on the real model ----------------------
     print("[verify] structured output (json_schema, grammar-constrained)")
@@ -198,6 +256,7 @@ def main():
     except (ValueError, AttributeError):
         s_obj, structured_ok = None, False
     print(f"  structured: ok={structured_ok} content={s_content!r}")
+    tap.take()  # nothing the structured request recorded belongs to a turn
 
     # -- the A/B under the new policy: stock replays the SAME inputs ----------
     print("[verify] loading STOCK bf16 arm for the A/B replay ...", flush=True)
@@ -208,11 +267,16 @@ def main():
     srv2 = start_server(stock_eng, "127.0.0.1", 0)
     port2 = srv2.server_address[1]
     stock = run_arm(port2, stock_eng, True, args.turns, args.max_tokens,
-                    label="stock", replay=[w["text"] for w in warm])
-    ab_identical = [s["text"] == w["text"] for s, w in zip(stock, warm)]
+                    label="stock", replay=[w["text"] for w in warm], tap=tap)
     srv2.shutdown()
+    tap.__exit__()
 
-    identical = [c["text"] == w["text"] for c, w in zip(cold, warm)]
+    cold_warm = compare_turns(cold, warm, own_history=True)
+    stock_comp = compare_turns(stock, warm, own_history=False)
+    bookkeeping = cache_bookkeeping(cold, warm)
+    above = [f"{name} turn {i + 1}" for name, rows in (("cold vs warm", cold_warm),
+                                                      ("stock vs compressed", stock_comp))
+             for i, r in enumerate(rows) if above_margin(r.get("fork"))]
     report = {
         "date": time.strftime("%Y-%m-%d %H:%M %Z"),
         "host": socket.gethostname(),
@@ -221,22 +285,26 @@ def main():
         "device": str(eng.device),
         "ctx": args.ctx,
         "max_tokens": args.max_tokens,
+        "near_tie_margin": NEAR_TIE_MARGIN,
         "turns": [
             {"turn": i + 1,
              "prompt_tokens": w["prompt_tokens"],
              "cached_tokens": w["cached_tokens"],
-             "text_identical_cold_vs_warm": identical[i],
-             "text_identical_stock_vs_compressed": ab_identical[i],
+             "cold_vs_warm": cold_warm[i],
+             "stock_vs_compressed": stock_comp[i],
              "ttft_cold_s": cold[i]["ttft"], "ttft_warm_s": w["ttft"],
              "ttft_ratio": round(cold[i]["ttft"] / w["ttft"], 2) if w["ttft"] else None,
              "wall_cold_s": cold[i]["wall"], "wall_warm_s": w["wall"],
              "text": w["text"]}
             for i, w in enumerate(warm)],
-        "all_text_identical": all(identical),
-        "ab_stock_vs_compressed_identical": all(ab_identical),
+        "cold_warm_same_text": all(r.get("same_text") for r in cold_warm),
+        "stock_compressed_same_text": all(r.get("same_text") for r in stock_comp),
+        "parts_above_near_tie_margin": above,
+        "cache_bookkeeping_problems": bookkeeping,
         "structured_output_ok": structured_ok,
         "structured_output": s_obj,
     }
+    report["pass"] = not above and not bookkeeping and structured_ok
     out = os.path.join(os.path.dirname(__file__), "..", "verification",
                        # MODEL IN THE FILENAME. Without it, two packs verified
                        # on the same day silently overwrite each other and the
@@ -249,19 +317,24 @@ def main():
     with open(out, "w") as f:
         json.dump(report, f, indent=2)
     print(json.dumps({k: report[k] for k in
-                      ("all_text_identical", "ab_stock_vs_compressed_identical",
+                      ("cold_warm_same_text", "stock_compressed_same_text",
+                       "parts_above_near_tie_margin", "cache_bookkeeping_problems",
                        "structured_output_ok")}, indent=2))
+
+    def said(r):
+        if not r["compared"]:
+            return "not compared (the arms' histories differ)"
+        return "same text" if r["same_text"] else describe(r["fork"])
+
     for t in report["turns"]:
-        print(f"  turn {t['turn']}: cold=warm:{t['text_identical_cold_vs_warm']} "
-              f"A/B:{t['text_identical_stock_vs_compressed']} "
+        print(f"  turn {t['turn']}: cold vs warm {said(t['cold_vs_warm'])}; "
+              f"stock vs compressed {said(t['stock_vs_compressed'])}; "
               f"cached={t['cached_tokens']}/{t['prompt_tokens']} "
               f"ttft {t['ttft_cold_s']}s -> {t['ttft_warm_s']}s "
               f"({t['ttft_ratio']}x)")
-    print(f"[verify] wrote {os.path.normpath(out)}")
+    print(f"[verify] {'PASS' if report['pass'] else 'FAIL'} — wrote {os.path.normpath(out)}")
     srv.shutdown()
-    # divergence is a finding, not a crash — but the exit code says it loudly
-    ok = report["ab_stock_vs_compressed_identical"] and report["structured_output_ok"]
-    sys.exit(0 if ok and report["all_text_identical"] else 2)
+    sys.exit(0 if report["pass"] else 2)
 
 
 if __name__ == "__main__":

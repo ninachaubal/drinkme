@@ -162,7 +162,7 @@ def params_from_env(depth_ceiling: int) -> tuple[int, int, int]:
     DRINKME_NGRAM_TOKENS / _MAX / _MIN, defaults as vLLM's.
 
     `depth_ceiling` is mtp.FUSED_M_MAX - 1: the verify batch is drafts + 1
-    rows and must stay inside the fused bit-identical window, which is the
+    rows and must stay inside the fused multi-column window, which is the
     same ceiling DRINKME_MTP_DEPTH is held to and for the same reason."""
     k = _int_env("DRINKME_NGRAM_TOKENS", DEFAULT_TOKENS, 1, depth_ceiling)
     hi = _int_env("DRINKME_NGRAM_MAX", DEFAULT_MAX, 1, 64)

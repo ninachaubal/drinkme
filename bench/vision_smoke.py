@@ -22,17 +22,19 @@ request.
          ~2432x1504), the same capture with the cap raised to its own size,
          and the 1x 1440x900 capture. Reports which sizes were read exactly.
   cache  A three-turn image conversation, warm (the prefix cache on) and
-         cold (off): the same greedy transcript, and the tower skipped for
-         the image inside the reused prefix. Two different same-size
+         cold (off), compared turn by turn: where the two first part, and
+         the top-2 logit margin there (agreement.PickTap); FAIL only on a
+         part above agreement.NEAR_TIE_MARGIN. The tower is skipped for the
+         image inside the reused prefix. Two different same-size
          screenshots, asked the same question in turn: each answer carries
          its own image's nonce. A cold-tier restore: two text conversations
          evict the image conversation's live slot, and its next turn is
          restored from the tier with the tower skipped.
   spec   With the image in context, the same greedy request under
-         DRINKME_SPEC=off, ngram and auto (MTP): identical transcripts (a
-         difference is reported with the first differing token), and the
-         acceptance with vs without the image (the same task over the
-         terminal's text).
+         DRINKME_SPEC=off, ngram and auto (MTP): each arm against serial
+         decode, where it parts and the serial decode's margin there (FAIL
+         only above agreement.NEAR_TIE_MARGIN), and the acceptance with vs
+         without the image (the same task over the terminal's text).
   sleep  POST /sleep?level=1 and /wake_up around the image conversation:
          the tower's parameters leave the device and come back bit for bit,
          the parked slot is restored at wake, and the next turn skips the
@@ -40,9 +42,9 @@ request.
   agent  The prefix cache in a Messages-API tool loop inside one user turn
          (screenshot, then a lookup, then the answer): the request after the
          screenshot's tool_result reuses the prefix that holds the image and
-         skips the tower; warm equals cold; a cold-tier restore of the loop
-         skips it too. --agent-thinking sends thinking on and passes every
-         thinking block back.
+         skips the tower; warm and cold compared as in `cache`; a cold-tier
+         restore of the loop skips it too. --agent-thinking sends thinking on
+         and passes every thinking block back.
 
 On gemma-4-31B-it no history a client sends back extends what the model
 generated, so `cache` and `agent` find nothing to reuse there: its template
@@ -87,6 +89,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from agreement import NEAR_TIE_MARGIN, PickTap, above_margin, fork  # noqa: E402
 from vision_screens import png_bytes, screenshot, small_text_screenshot  # noqa: E402
 
 MODELS = {"27b": "Qwen/Qwen3.8-27B", "mimo": "XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B",
@@ -333,14 +336,45 @@ def phase_ladder(cl: Client, eng) -> dict:
     return out
 
 
-def _conversation(cl: Client, png: bytes, turns: list[str], history=None) -> list[dict]:
+def _taken(tap, res) -> dict:
+    """`res` with the picks and margins its request recorded, when a tap
+    (agreement.PickTap) is installed."""
+    if tap is not None:
+        res["ids"], res["margins"] = tap.take()
+    return res
+
+
+def _conversation(cl: Client, png: bytes, turns: list[str], history=None,
+                  tap=None) -> list[dict]:
     msgs = list(history or [])
     out = []
     for i, q in enumerate(turns):
         msgs.append(oa_user(png if i == 0 and not history else None, q))
-        r = cl.chat(msgs, max_tokens=40)
+        r = _taken(tap, cl.chat(msgs, max_tokens=40))
         out.append(r)
         msgs.append(assistant_turn(r))
+    return out
+
+
+def _chat_reply(res):
+    return res.get("reasoning", ""), res["text"]
+
+
+def _warm_vs_cold(warm: list, cold: list, reply) -> list[dict]:
+    """Request by request, warm against cold: the same reply, or where their
+    picks part (agreement.fork). Each arm re-sends its own replies, so the
+    requests after the first that parts saw different prompts on each arm
+    and are not compared."""
+    out, parted = [], False
+    for w, c in zip(warm, cold):
+        if parted:
+            out.append({"compared": False})
+            continue
+        same = reply(w) == reply(c)
+        out.append({"compared": True, "same": same,
+                    "fork": None if same else fork(w.get("ids", []), c.get("ids", []),
+                                                   w.get("margins"), c.get("margins"))})
+        parted = parted or not same
     return out
 
 
@@ -353,15 +387,18 @@ def phase_cache(cl: Client, eng) -> dict:
     pngb = png_bytes(screenshot(2560, 1440, nonce=NONCE_B, cell=CELL_B, seed=1,
                                 scale=UI_SCALE))
     out = {}
-    warm = _conversation(cl, png, TURNS)
-    eng._reuse = False
-    try:
-        cold = _conversation(cl, png, TURNS)
-    finally:
-        eng._reuse = True
+    with PickTap() as tap:
+        warm = _conversation(cl, png, TURNS, tap=tap)
+        eng._reuse = False
+        try:
+            cold = _conversation(cl, png, TURNS, tap=tap)
+        finally:
+            eng._reuse = True
     out["warm"] = [short(r) | {"cached": cached(r), "images": images_line(r)} for r in warm]
     out["cold"] = [short(r) | {"cached": cached(r), "images": images_line(r)} for r in cold]
-    out["warm_equals_cold"] = [a["text"] == b["text"] for a, b in zip(warm, cold)]
+    out["warm_vs_cold"] = _warm_vs_cold(warm, cold, _chat_reply)
+    out["warm_vs_cold_above_near_tie"] = any(above_margin(r.get("fork"))
+                                             for r in out["warm_vs_cold"])
     # a turn whose prompt extends the last one's slot reuses the image's KV:
     # there the tower must not run (a turn can miss the slot for a text
     # reason, e.g. the template trimming the last reply's trailing newline)
@@ -390,7 +427,7 @@ def phase_cache(cl: Client, eng) -> dict:
                         "restored": any("from the cold tier" in ln for ln in r3["log"]),
                         "tower_skipped": tower_skipped(r3),
                         "equals_warm": r3["text"] == warm[2]["text"]}
-    out["pass"] = (all(out["warm_equals_cold"]) and any(out["warm_reused"])
+    out["pass"] = (not out["warm_vs_cold_above_near_tie"] and any(out["warm_reused"])
                    and all(out["warm_tower_skipped_where_reused"])
                    and out["same_size_a"]["own"] and out["same_size_b"]["own"]
                    and out["same_size_b"]["not_a"] and out["cold_tier"]["restored"]
@@ -412,13 +449,15 @@ AGENT_THINKING = False  # --agent-thinking
 SPEC_TASKS = ("transcribe", "describe")  # --spec-tasks
 
 
-def _agent_loop(cl: Client, png: bytes, before_last=None, thinking=False) -> list[dict]:
+def _agent_loop(cl: Client, png: bytes, before_last=None, thinking=False,
+                tap=None) -> list[dict]:
     """A Messages-API tool loop inside ONE user turn: the model asks for a
     screenshot, reads it from a tool_result, calls lookup_owner with the
     degraded service, then answers. Each request resends the whole history
     with the model's own tool calls. before_last() runs before the third
     request. With thinking, every turn's thinking blocks go back with it
-    (preserved thinking). Returns the responses (three when the model
+    (preserved thinking). With `tap` (agreement.PickTap), each response
+    keeps its picks and margins. Returns the responses (three when the model
     follows the ask)."""
     b64 = base64.b64encode(png).decode()
     msgs = [{"role": "user", "content": AGENT_ASK}]
@@ -426,8 +465,8 @@ def _agent_loop(cl: Client, png: bytes, before_last=None, thinking=False) -> lis
     for i in range(3):
         if i == 2 and before_last is not None:
             before_last()
-        r = cl.messages(msgs, max_tokens=512 if thinking else 64, tools=AGENT_TOOLS,
-                        thinking=thinking)
+        r = _taken(tap, cl.messages(msgs, max_tokens=512 if thinking else 64,
+                                    tools=AGENT_TOOLS, thinking=thinking))
         out.append(r)
         d = r["data"] if r["status"] == 200 else {}
         uses = [b for b in d.get("content", []) if b.get("type") == "tool_use"]
@@ -456,26 +495,30 @@ def phase_agent(cl: Client, eng) -> dict:
     """The prefix cache with an image in an agent's tool loop inside one
     user turn, the shape a harness sends: the request after the
     screenshot's tool_result must reuse the prefix holding the image, and
-    the tower must not run for it; warm equals cold; and after two text
-    conversations evict the loop's slot, the same last request is restored
-    from the cold tier with the tower skipped. Whether the re-rendered
+    the tower must not run for it; warm and cold part nowhere or at a
+    near-tie (`_warm_vs_cold`); and after two text conversations evict the
+    loop's slot, the same last request is restored from the cold tier with
+    the tower skipped. Whether the re-rendered
     history extends what the model generated is the family template's
     (bench/prefix_slots_verify.py, "THINKING AND THE HISTORY RE-RENDER";
     gemma-4: the module docstring)."""
     png = png_bytes(screenshot(2560, 1440, nonce=NONCE, cell=CELL, scale=UI_SCALE))
     out = {"thinking": AGENT_THINKING}
-    warm = _agent_loop(cl, png, thinking=AGENT_THINKING)
-    eng._reuse = False
-    try:
-        cold = _agent_loop(cl, png, thinking=AGENT_THINKING)
-    finally:
-        eng._reuse = True
+    with PickTap() as tap:
+        warm = _agent_loop(cl, png, thinking=AGENT_THINKING, tap=tap)
+        eng._reuse = False
+        try:
+            cold = _agent_loop(cl, png, thinking=AGENT_THINKING, tap=tap)
+        finally:
+            eng._reuse = True
     view = lambda r: short(r) | {"cached": cached(r), "images": images_line(r),  # noqa: E731
                                  "content": r["data"].get("content") if r["status"] == 200
                                  else r["data"]}
     out["warm"] = [view(r) for r in warm]
     out["cold"] = [view(r) for r in cold]
-    out["warm_equals_cold"] = [_blocks(r) for r in warm] == [_blocks(r) for r in cold]
+    out["warm_vs_cold"] = _warm_vs_cold(warm, cold, _blocks)
+    out["warm_vs_cold_above_near_tie"] = any(above_margin(r.get("fork"))
+                                             for r in out["warm_vs_cold"])
     last = warm[-1]
     out["answer_ok"] = ("bottle" in last["text"] and "local" in last["text"]
                         and AGENT_OWNER in last["text"])
@@ -495,7 +538,7 @@ def phase_agent(cl: Client, eng) -> dict:
                         "equals_warm": [_blocks(r) for r in again] == [_blocks(r) for r in warm]}
     out["ends_inside_an_image"] = any("ends inside an image" in ln
                                       for r in warm + again for ln in r["log"])
-    out["pass"] = (len(warm) == 3 and out["answer_ok"] and out["warm_equals_cold"]
+    out["pass"] = (len(warm) == 3 and out["answer_ok"] and not out["warm_vs_cold_above_near_tie"]
                    and all(out["after_image_reused"]) and all(out["after_image_tower_skipped"])
                    and out["cold_tier"]["restored"]
                    and all(out["cold_tier"]["tower_skipped_after_image"])
@@ -613,17 +656,19 @@ def phase_spec(cl: Client, eng) -> dict:
                 for k in diff:  # the serial decode's margin where an arm left it
                     diff[k]["logits"] = _margin(recs["off"], recs[k], eng)
                 out[f"{task}_{kind}"] = {"arms": arms,
-                                         "identical": all(t == ref for t in texts.values()),
+                                         "same_text": all(t == ref for t in texts.values()),
                                          "diff": diff}
     finally:
         eng._reuse = True
         _spec_arm(eng, None)
-    # with an image in context every arm is the serial transcript, or leaves
-    # it at a near-tie: a serial-decode margin within one bf16 step at the
-    # logits' magnitude (0.25 under 64). The text-only rows are the
+    # with an image in context every arm agrees with serial decode, or leaves
+    # it at a near-tie: a serial-decode margin between its token and the
+    # arm's of at most agreement.NEAR_TIE_MARGIN. A text difference with no
+    # differing pick has no margin and fails. The text-only rows are the
     # acceptance baseline; their differences are reported the same way.
-    out["pass"] = all(v["identical"] or all(
-        abs((d.get("logits") or {}).get("margin", 1e9)) <= 0.25 for d in v["diff"].values())
+    out["pass"] = all(v["same_text"] or all(
+        abs((d.get("logits") or {}).get("margin", 1e9)) <= NEAR_TIE_MARGIN
+        for d in v["diff"].values())
         for k, v in out.items() if isinstance(v, dict) and k.endswith("_image"))
     return out
 

@@ -239,13 +239,12 @@ class CompressedLinear(torch.nn.Module):
     # mc is FLAT in weight reads like dense is, so the threshold is the
     # narrow question — does dense beat mc anywhere at or below MC_MAX? It is
     # MC_MAX + 1 by construction, and not on speed alone: mc is bitwise the
-    # M=1 kernel per column and dense is not, so a batch that split across
-    # both arms would stop being bit-identical to the serial decode step,
-    # which is what lets MTP claim a token-identical compressed stream.
-    # Uniform mc through MC_MAX keeps the whole verify batch inside one
-    # numerics window. Routing per shape (dense beats mc earlier on the
-    # small square attention projections than on the MLP tensors that
-    # dominate a layer) would win a few percent and cost that property.
+    # M=1 kernel per column and dense is not, so uniform mc through MC_MAX
+    # keeps every compressed Linear of an MTP verify batch in one numerics
+    # window, the serial decode step's. Routing per shape (dense beats mc
+    # earlier on the small square attention projections than on the MLP
+    # tensors that dominate a layer) might win a few percent; that has not
+    # been measured.
     # The whole-layer crossover has not been swept with the radix mc kernel;
     # DRINKME_PREFILL_DENSE_MIN overrides this at runtime (module docstring +
     # _dense_min): the per-platform measurement instrument, 0/negative = off.

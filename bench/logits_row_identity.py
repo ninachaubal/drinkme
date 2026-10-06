@@ -10,16 +10,18 @@ THE STATED RISK, which this measures rather than assumes: on the compressed
 arm a 1-row lm_head takes the GEMV kernel while a many-row one takes
 decode-once + a dense GEMM, and those agree only to accumulation order. So a
 near-tie at token one could land the other way than the every-row product.
-Arm-vs-arm identity is already covered by the prefix-cache A/B; this is the
-one-row-vs-every-row question.
+Arm-vs-arm agreement is the prefix-cache A/B's question; this is the
+one-row-vs-every-row one.
 
 Compares, at a real prompt on the real model:
     lm_head(hidden)[-1]      every row, then discard
     lm_head(hidden[:, -1:])  one row, as prefill runs it
 
-on bitwise equality, on argmax (does the SAMPLED TOKEN move), and on the
-top-2 gap when it does — a flip only matters where the gap is at the noise
-floor, and that is exactly what "near-tie" means.
+on bitwise equality (reported), on argmax (does the sampled token move), and
+where it moves, each row's gap between the two picks (agreement.row_fork).
+Two orders of the same sums can flip a near-tie, which is reported and
+passes; a flip with a gap above agreement.NEAR_TIE_MARGIN, or a row that is
+not finite, exits 2.
 
 Run:  uv run --no-sync python bench/logits_row_identity.py --pack <dir>
 """
@@ -30,6 +32,9 @@ import json
 import os
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from agreement import NEAR_TIE_MARGIN, above_margin, describe, row_fork  # noqa: E402
 
 DEFAULT_PACK = os.path.expanduser(
     "~/.cache/drinkme/packs/Qwen--Qwen3.8-27B@1d4bf0f2ff60")
@@ -86,27 +91,33 @@ def main() -> int:
             new = model.lm_head(h[:, -1:])[0][-1].float()  # one row
 
         bitwise = bool(torch.equal(old, new))
-        same_tok = int(old.argmax()) == int(new.argmax())
+        finite = bool(torch.isfinite(old).all() and torch.isfinite(new).all())
+        pick = row_fork(old, new)
         top2 = torch.topk(old, 2).values
         gap = float(top2[0] - top2[1])
         maxdiff = float((old - new).abs().max())
         rows.append({"prompt_tokens": len(ids), "bitwise_identical": bitwise,
-                     "same_argmax": same_tok, "top2_gap": round(gap, 6),
-                     "max_abs_diff": maxdiff})
-        print(f"  [{i+1}] tokens={len(ids):>5} bitwise={bitwise} "
-              f"same_token={same_tok} top2_gap={gap:.4f} "
+                     "finite": finite, "same_argmax": pick["agree"], "pick": pick,
+                     "top2_gap": round(gap, 6), "max_abs_diff": maxdiff})
+        print(f"  [{i+1}] tokens={len(ids):>5} bitwise={bitwise} finite={finite} "
+              f"token {describe(pick)} top2_gap={gap:.4f} "
               f"max|diff|={maxdiff:.3e}", flush=True)
 
     all_same_token = all(r["same_argmax"] for r in rows)
     all_bitwise = all(r["bitwise_identical"] for r in rows)
+    above = [i + 1 for i, r in enumerate(rows) if above_margin(r["pick"])]
     report = {
         "date": time.strftime("%Y-%m-%d %H:%M %Z"),
         "model": meta["hfRepo"],
         "device": str(eng.device),
+        "near_tie_margin": NEAR_TIE_MARGIN,
         "rows": rows,
         "all_bitwise_identical": all_bitwise,
         "all_same_sampled_token": all_same_token,
+        "all_finite": all(r["finite"] for r in rows),
+        "flips_above_near_tie_margin": above,
     }
+    report["pass"] = report["all_finite"] and not above
     out_dir = os.path.join(os.path.dirname(__file__), "..", "verification")
     path = os.path.abspath(os.path.join(
         out_dir, f"logits_row_identity_{meta['hfRepo'].split('/')[-1]}_"
@@ -115,13 +126,14 @@ def main() -> int:
     with open(path, "w") as f:
         json.dump(report, f, indent=2)
     print(json.dumps({k: report[k] for k in
-                      ("all_bitwise_identical", "all_same_sampled_token")},
+                      ("all_bitwise_identical", "all_same_sampled_token", "all_finite",
+                       "flips_above_near_tie_margin")},
                      indent=2))
-    print(f"[gate] wrote {path}")
-    # the SAMPLED TOKEN is the gate. bitwise equality is reported, not required:
-    # the two paths use different kernels by design and agree only to
-    # accumulation order.
-    return 0 if all_same_token else 2
+    print(f"[gate] {'PASS' if report['pass'] else 'FAIL'} — wrote {path}")
+    # bitwise equality and the sampled token are reported, not required: the
+    # two paths use different kernels by design and agree only to
+    # accumulation order, so a flip passes when it is a near-tie.
+    return 0 if report["pass"] else 2
 
 
 if __name__ == "__main__":

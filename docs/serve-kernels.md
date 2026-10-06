@@ -243,9 +243,10 @@ ROCm, Metal and the CPU never capture a graph.
 Graph mode is on only for the model families and modes on
 `serving/cudagraph.py`'s `VERIFIED` list. A family goes on the list once
 `bench/cuda_graph_gate.py` has shown three things on a CUDA card: graph
-replay is bitwise equal to the same step run eagerly, the compressed arm
-matches stock token for token in graph mode, and the step is no slower than
-the eager step at 4k and 16k live tokens. The list is keyed by family, not
+replay is bitwise equal to the same step run eagerly, serve's own generate
+in graph mode agrees with eager decode and with the stock arm except at
+near-ties, and the step is no slower than the eager step at 4k and 16k live
+tokens. The list is keyed by family, not
 by compression profile: each family on it passed on a sip pack and on a
 gulp pack, the two profiles `drinkme pack` writes (`GATED_PROFILES` in
 `serving/cudagraph_fit.py`). A family that is not on the list,

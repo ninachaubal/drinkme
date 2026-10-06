@@ -41,9 +41,11 @@ loop (arms.timed_decode), through `decide()`:
   - ROCm, Metal and the CPU never graph (TheRock's HIP graph capture has
     segfaulted on the pinned build; nothing is announced there);
   - a model family and mode not on `VERIFIED` decodes eager, with one line
-    saying so. A (family, mode) goes on the list only after its graph
-    replay matched the eager static step bit for bit and the compressed arm
-    matched stock token for token in graph mode (bench/cuda_graph_gate.py);
+    saying so. A (family, mode) goes on the list only after
+    bench/cuda_graph_gate.py's verdicts on it: graph replay matched the
+    eager static step bit for bit, and serve's own generate in graph mode
+    (against eager, speculation off and on, and across arms) parted from
+    the other runs nowhere or only at a near-tie;
   - a capture that fails decodes eager, with one line saying so.
 
 MEMORY. Every graph captured against one cache (the decode step, the MTP

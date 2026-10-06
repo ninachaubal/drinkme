@@ -234,10 +234,10 @@ def test_default_depth_keeps_the_verify_batch_on_the_bit_pinned_arm(monkeypatch)
     (radix_ops.gemv_mc), whose per-column output is within the float64
     oracle's bound of the M=1 decode step's (bench/radix_mc_bitpin.py:
     bitwise is recorded, not gated), and only switches to decode-once +
-    native GEMM at GEMM_MIN_ROWS, whose
-    reduction order is a different one. If either constant moves, the depth
-    ceiling has to move with it or MTP starts forking greedy near-ties off the
-    non-MTP transcript — so this asserts the derivation, not the number.
+    native GEMM at GEMM_MIN_ROWS: a transient BF16 copy of every weight per
+    verify pass, in a different reduction order. If either constant moves,
+    the depth ceiling has to move with it or the default verify batch leaves
+    the multi-column kernel — so this asserts the derivation, not the number.
 
     A python ROW LOOP over the M=1 kernel would have the same numerics at
     M reads of the weights; mc keeps the numerics and drops the reads, and

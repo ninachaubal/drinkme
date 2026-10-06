@@ -7,13 +7,14 @@ cycle reads it FOUR times for the drafts alone, on top of once for the verify.
 Roughly a third of the cycle's bytes go to proposing tokens, not to deciding
 them.
 
-THE LEVER, and why it is lossless: a draft is a PROPOSAL. The verify pass runs
-the full lm_head over every row and picks with the engine's own sampler, so
-the emitted stream is the serial greedy stream whatever the draft proposed. A
-draft that cannot reach a token simply drafts something else, the verify pass
-rejects it, and the cycle loses its tail. That costs ACCEPTANCE — measurable,
-and expected to be small because the tokens outside a top-K subset are the
-rare ones a draft head misses anyway — and it cannot cost a token.
+THE LEVER, and why it only costs acceptance: a draft is a PROPOSAL. The
+verify pass runs the full lm_head over every row and picks with the engine's
+own sampler, so every emitted token is the trunk's own pick whatever the
+draft proposed. A draft that cannot reach a token simply drafts something
+else, the verify pass rejects it, and the cycle loses its tail. That costs
+ACCEPTANCE — measurable, and expected to be small because the tokens outside
+a top-K subset are the rare ones a draft head misses anyway — and it never
+decides a token.
 
 So: pick K rows of the projection once, read only those. Off by default.
 

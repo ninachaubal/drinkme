@@ -33,9 +33,11 @@ Each arm is its own process, run in turn, writing <out>/<arm>.pt:
 PASS: every feature and logit finite; ref_served == stock == comp byte-equal,
 bounded and unbounded; the served tower's mean |error| against the same tower
 in fp32 at most 1.5x transformers' own bf16 tower's (ref);
-the logits rows all pick the same first token; ids and pixels agree with
-transformers' processor. Every number is printed and kept in
-<out>/verdict.json.
+no two logits rows part on the first token with a gap above
+agreement.NEAR_TIE_MARGIN (the rows come from different attention routes
+and arms, so they agree or part at a near-tie; a near-tie part is reported);
+ids and pixels agree with transformers' processor. Every number is printed
+and kept in <out>/verdict.json.
 
 Hold `flock -w 3600 /tmp/drinkme-gpu.lock` around each arm. Set
 TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1, as the served units are.
@@ -50,6 +52,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from agreement import NEAR_TIE_MARGIN, above_margin, row_fork  # noqa: E402
 
 MODELS = {"27b": ("Qwen/Qwen3.8-27B", "models--Qwen--Qwen3.8-27B"),
           "mimo": ("XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B",
@@ -344,9 +347,19 @@ def compare(args):
     near = (v["vs_fp32"]["stock_bounded"]["mean_abs"]
             <= 1.5 * v["vs_fp32"]["ref"]["mean_abs"])
     argmax = {x["argmax"] for x in v["logits"].values()}
+    v["same_first_token"] = len(argmax) == 1
+    v["first_token_parts"] = {}  # every pair of rows whose first tokens differ
+    names = list(rows)
+    for i, p in enumerate(names):
+        for q in names[i + 1:]:
+            f = row_fork(rows[p], rows[q])
+            if not f["agree"]:
+                v["first_token_parts"][f"{p}_vs_{q}"] = f
+    v["near_tie_margin"] = NEAR_TIE_MARGIN
     v["pass"] = {"finite": all(v["features_finite"].values()) and all(v["logits_finite"].values()),
                  "tower_bits": bits, "tower_near_reference": near,
-                 "same_first_token": len(argmax) == 1,
+                 "first_token_agrees_or_near_tie": not any(above_margin(f) for f in
+                                                           v["first_token_parts"].values()),
                  "ids_and_pixels": v["ids_equal_stock_comp"] and v["processor_pixels_equal"]
                  and v["processor_ids_equal"] and all(v["patch_embed_routed"])}
     v["verdict"] = "PASS" if all(v["pass"].values()) else "FAIL"

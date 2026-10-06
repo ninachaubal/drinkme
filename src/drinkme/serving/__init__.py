@@ -6,7 +6,7 @@
                and compressed), loaded whole or streamed onto a meta skeleton
   mtp.py       MTP speculative decoding (DRINKME_MTP_DEPTH, on by default when the
                checkpoint carries a head): the checkpoint's own draft head,
-               verify-and-accept, same tokens
+               verify-and-accept, fewer weight-reads
   ngram.py     n-gram (prompt-lookup) speculation: a proposer made out of the
                context itself, no draft model — DRINKME_SPEC picks between it
                and the head, and both go through mtp.py's one verify

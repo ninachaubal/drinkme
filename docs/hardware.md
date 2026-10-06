@@ -12,7 +12,7 @@ combinations have been tested; the table below and
 |---|---|---|---|
 | NVIDIA | PyTorch/CUDA + Triton | lane and group `cuda` (the PyPI wheel) | first-run install and self-test; launch-table rows measured on L4, A10, A10G, L40S, H100; decode replays CUDA graphs for the verified model families, which is experimental ([CUDA graphs](serve-kernels.md#cuda-graphs)) |
 | AMD, Linux | PyTorch/ROCm + Triton | two lanes, chosen per gfx target ([ROCm](rocm.md#install-lanes)) | verified on Strix Halo and RX 7600 XT |
-| Apple silicon | MLX/Metal | lane and group `metal` | BF16 kernels checked on toy and real Qwen3-8B tensors; Qwen3-1.7B and Qwen3-4B served and benched end to end on an M4 (24 GB), 1.21× and 1.25× MLX-LM's BF16, bit-exact. Other families, the 8B and larger on 24 GB, and speculation on MLX are in progress. See [Metal](metal.md) for kernel measurements and test coverage |
+| Apple silicon | MLX/Metal | lane and group `metal` | BF16 kernels checked on toy and real Qwen3-8B tensors; Qwen3-1.7B and Qwen3-4B packs, verified bit for bit, served and benched end to end on an M4 (24 GB) at 1.21× and 1.25× MLX-LM's BF16 decode speed. Other families, the 8B and larger on 24 GB, and speculation on MLX are in progress. See [Metal](metal.md) for kernel measurements and test coverage |
 
 ## AMD
 

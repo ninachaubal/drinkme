@@ -15,7 +15,7 @@ snapshot at the menu's revision, mounted as that model's HF_HOME.
         (skipped when the pack's meta.json is there), then `drinkme verify`
     uv tool run modal run bench/modal_cuda_graphs.py --what gate --card L4 --out-dir DIR
         bench/cuda_graph_gate.py per arm (graph == eager static step,
-        compressed == stock tokens, the step at 4k/16k live)
+        compressed vs stock tokens, the step at 4k/16k live)
     uv tool run modal run bench/modal_cuda_graphs.py --what bench --card L4 --out-dir DIR
         `drinkme bench --pack-dir` under DRINKME_CUDA_GRAPHS=0, then the
         default, in one container

@@ -17,15 +17,25 @@ vs cold here is exactly reuse vs no reuse.
 
   arm `single`  one slot, one conversation, three turns. The shipped
                 behaviour, unchanged by the prefix cache: every turn extends, so every
-                turn is a split prefill. argmax must match cold.
+                turn is a split prefill, compared against cold.
   arm `slots3`  three slots, conversations A/B/C round-robin. Turn 1 of each
                 is cold (nothing to match); turns 2 and 3 must REUSE — on
                 one slot they could not, because the other two conversations
-                would have taken it — and must still match cold argmax.
+                would have taken it — and are compared against cold.
   arm `evict`   a fourth conversation D arrives. It takes the least recently
                 used slot (A's), so B and C stay warm and A's next turn is
-                cold and merely slower. Correctness is the claim; the wall
-                times say "merely".
+                cold and merely slower. The slot schedule is the claim; the
+                wall times say "merely".
+
+THE VERDICT. Each turn's cache must do what the schedule says (reused or
+not), and the tap must have seen every prefill row. Warm and cold prefill
+rows are the same computation modulo kernel batching, so their first-token
+picks agree or part at a near-tie: where they part, each row's gap between
+the two picks is reported (agreement.row_fork). The generated text is
+compared the same way through agreement.PickTap, at the first token where
+the picks part. A part whose margin is above agreement.NEAR_TIE_MARGIN
+fails the run; a near-tie part is reported and passes. The max abs delta
+between the rows is reported whatever it is.
 
 THINKING AND THE HISTORY RE-RENDER (measured on the GPU: the 27B arm showed `cache False` on every warm turn while the
 8B reused fine). This bench drives the engine directly and feeds each reply
@@ -70,6 +80,9 @@ import sys
 import time
 
 import torch
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from agreement import NEAR_TIE_MARGIN, PickTap, above_margin, describe, fork, row_fork  # noqa: E402
 
 # Same default as prefix_cache_verify.py: the 8B reproduces a settled
 # receipt from a bare invocation. The HYBRID is where slots earn their keep
@@ -163,11 +176,14 @@ def engine_over(model, tok, proto, slots: int):
 
 
 def _generate(eng, msgs, max_tokens: int):
-    """One greedy generation through the seam (engine.complete), collected."""
+    """One greedy generation through the seam (engine.complete), collected,
+    with each emitted token's pick and margin (agreement.PickTap)."""
     from drinkme.serving.engine import GenerationRequest, SampleParams, complete
 
-    return complete(eng, GenerationRequest(
-        msgs, SampleParams(temperature=0.0, max_tokens=max_tokens)))
+    with PickTap() as tap:
+        res = complete(eng, GenerationRequest(
+            msgs, SampleParams(temperature=0.0, max_tokens=max_tokens)))
+    return res, *tap.take()
 
 
 def run_schedule(eng, tap, schedule, convs, max_tokens: int, hists=None,
@@ -186,14 +202,15 @@ def run_schedule(eng, tap, schedule, convs, max_tokens: int, hists=None,
         msgs = list(hist)
         tap.arm()
         t0 = time.perf_counter()
-        res = _generate(eng, msgs, max_tokens)
+        res, ids, margins = _generate(eng, msgs, max_tokens)
         wall = time.perf_counter() - t0
         hist.append({"role": "assistant", "content": res.text})
         out.append({"conv": name, "turn": turn + 1, "expect": expect,
                     "messages": msgs, "text": res.text,
                     "prompt_tokens": res.prompt_tokens,
                     "cached_tokens": res.cached_tokens,
-                    "wall": round(wall, 3), "logits": tap.first})
+                    "wall": round(wall, 3), "logits": tap.first,
+                    "ids": ids, "margins": margins})
         print(f"  [{label}] {name}{turn + 1}: prompt={res.prompt_tokens} "
               f"cached={res.cached_tokens} ({expect}) wall={wall:.2f}s",
               flush=True)
@@ -211,10 +228,11 @@ def run_cold(eng, tap, records, max_tokens: int, label: str = "cold"):
         for rec in records:
             tap.arm()
             t0 = time.perf_counter()
-            res = _generate(eng, rec["messages"], max_tokens)
+            res, ids, margins = _generate(eng, rec["messages"], max_tokens)
             wall = time.perf_counter() - t0
             out.append({"text": res.text, "wall": round(wall, 3),
-                        "cached_tokens": res.cached_tokens, "logits": tap.first})
+                        "cached_tokens": res.cached_tokens, "logits": tap.first,
+                        "ids": ids, "margins": margins})
             print(f"  [{label}] {rec['conv']}{rec['turn']}: wall={wall:.2f}s",
                   flush=True)
         return out
@@ -223,10 +241,12 @@ def run_cold(eng, tap, records, max_tokens: int, label: str = "cold"):
 
 
 def compare(warm, cold):
-    """Per-turn verdict. The claim is argmax identity and text identity; the
-    max abs delta is REPORTED whatever it is, because a reused prefix batches
-    its suffix differently than a cold full prefill and pretending that is
-    bit-exact would be the one lie this file exists to prevent."""
+    """Per turn, warm against cold on the same messages: whether the cache
+    did what the schedule says, the prefill rows' first-token picks
+    (agreement.row_fork), and the generated picks (agreement.fork). The max
+    abs delta is reported whatever it is: a reused prefix batches its suffix
+    differently than a cold full prefill, so the rows agree only modulo
+    accumulation order."""
     rows = []
     for w, c in zip(warm, cold):
         if w["logits"] is None or c["logits"] is None:
@@ -234,28 +254,39 @@ def compare(warm, cold):
                          "logits_seen": False})
             continue
         delta = (w["logits"] - c["logits"]).abs().max().item()
+        same_text = w["text"] == c["text"]
         rows.append({
             "conv": w["conv"], "turn": w["turn"], "logits_seen": True,
             "expect": w["expect"], "cached_tokens": w["cached_tokens"],
             "prompt_tokens": w["prompt_tokens"],
             "cache_as_expected": (w["cached_tokens"] > 0) == (w["expect"] == "warm"),
             "max_abs_delta": delta,
-            "argmax_identical": int(w["logits"].argmax()) == int(c["logits"].argmax()),
-            "text_identical": w["text"] == c["text"],
+            "first_token": row_fork(w["logits"], c["logits"]),
+            "same_text": same_text,
+            "text_fork": None if same_text else fork(w["ids"], c["ids"], w["margins"], c["margins"]),
             "wall_warm_s": w["wall"], "wall_cold_s": c["wall"],
         })
     return rows
 
 
 def verdict(rows):
-    return {
+    """One arm's turns summed up. `pass`: every prefill row seen, every
+    cache as the schedule expects, and no first-token or text part above
+    agreement.NEAR_TIE_MARGIN."""
+    above = [f"{r['conv']}{r['turn']}" for r in rows
+             if above_margin(r.get("first_token")) or above_margin(r.get("text_fork"))]
+    v = {
         "turns": len(rows),
-        "all_argmax_identical": all(r.get("argmax_identical") for r in rows),
-        "all_text_identical": all(r.get("text_identical") for r in rows),
+        "all_logits_seen": all(r.get("logits_seen") for r in rows),
         "all_cache_as_expected": all(r.get("cache_as_expected") for r in rows),
+        "first_token_agrees": all((r.get("first_token") or {}).get("agree") for r in rows),
+        "same_text": all(r.get("same_text") for r in rows),
+        "parts_above_near_tie_margin": above,
         "max_abs_delta": max((r.get("max_abs_delta", 0.0) for r in rows),
                              default=0.0),
     }
+    v["pass"] = v["all_logits_seen"] and v["all_cache_as_expected"] and not above
+    return v
 
 
 def main():
@@ -336,6 +367,7 @@ def main():
         "ctx": args.ctx,
         "max_tokens": args.max_tokens,
         "enable_thinking": False if args.no_think else "template default",
+        "near_tie_margin": NEAR_TIE_MARGIN,
         "slot_bytes": {"fixed": one._slot_fixed_bytes,
                        "rings": one._slot_ring_bytes,
                        "per_token": one._slot_token_bytes,
@@ -345,9 +377,7 @@ def main():
         "arms": {name: {"verdict": verdict(rows), "turns": rows}
                  for name, rows in results.items()},
     }
-    ok = all(v["all_argmax_identical"] and v["all_text_identical"]
-             and v["all_cache_as_expected"]
-             for v in (report["arms"][a]["verdict"] for a in report["arms"]))
+    ok = all(report["arms"][a]["verdict"]["pass"] for a in report["arms"])
     report["pass"] = ok
     out = os.path.join(os.path.dirname(__file__), "..", "verification",
                        # the model in the filename: two packs verified on one
@@ -359,9 +389,14 @@ def main():
         json.dump(report, f, indent=2)
     for name in results:
         v = report["arms"][name]["verdict"]
-        print(f"  {name}: argmax {v['all_argmax_identical']} · text "
-              f"{v['all_text_identical']} · cache {v['all_cache_as_expected']} "
-              f"· max|delta| {v['max_abs_delta']:.3e} over {v['turns']} turns")
+        print(f"  {name}: first token agrees {v['first_token_agrees']} · same text "
+              f"{v['same_text']} · cache {v['all_cache_as_expected']} "
+              f"· max|delta| {v['max_abs_delta']:.3e} over {v['turns']} turns "
+              f"· above the near-tie margin: {v['parts_above_near_tie_margin'] or 'none'}")
+        for r in results[name]:
+            if r.get("logits_seen") and not (r["first_token"]["agree"] and r["same_text"]):
+                print(f"    {r['conv']}{r['turn']}: first token {describe(r['first_token'])}; "
+                      f"text {describe(r['text_fork']) if r['text_fork'] else 'same'}")
     print(f"[slots] {'PASS' if ok else 'FAIL'} — wrote {os.path.normpath(out)}")
     return 0 if ok else 2
 
